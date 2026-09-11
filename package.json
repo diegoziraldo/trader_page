@@ -1,0 +1,24 @@
+{
+  "name": "vue-finanzas",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "pages:dev": "npm run build && wrangler pages dev dist --d1=DB",
+    "db:create": "wrangler d1 create vue-finanzas-db",
+    "db:migrate:local": "wrangler d1 execute DB --local --file=./schema.sql",
+    "db:migrate:remote": "wrangler d1 execute DB --remote --file=./schema.sql"
+  },
+  "dependencies": {
+    "hono": "^4.6.0",
+    "vue": "^3.4.21"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^5.0.4",
+    "vite": "^5.2.8",
+    "wrangler": "^4.86.0"
+  }
+}

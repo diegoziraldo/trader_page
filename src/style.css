@@ -1,0 +1,37 @@
+:root{
+  --bg:#0f1115;
+  --panel:#14171f;
+  --panel-alt:#191d27;
+  --border:#262b36;
+  --text:#f1f3f4;
+  --text-dim:#b0b4bc;
+  --blue:#8ab4f8;
+  --up:#00d9a3;
+  --down:#ff4d5e;
+  --font-ui:'Inter', sans-serif;
+  --font-num:'JetBrains Mono', monospace;
+}
+
+*{box-sizing:border-box;margin:0;padding:0;}
+
+html,body,#app{height:100%;}
+
+body{
+  background:var(--bg);
+  color:var(--text);
+  font-family:var(--font-ui);
+  font-size:13px;
+}
+
+.mono{font-family:var(--font-num);font-variant-numeric:tabular-nums;}
+.up{color:var(--up);}
+.down{color:var(--down);}
+
+a{color:inherit;}
+
+.card{
+  background:var(--panel);
+  border:1px solid var(--border);
+  border-radius:12px;
+  padding:16px;
+}

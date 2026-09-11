@@ -1,0 +1,47 @@
+// Tickers de EE.UU./globales que tienen CEDEAR listado en BYMA.
+// Se usa para filtrar el calendario de balances y mostrar solo lo que
+// es relevante para un inversor argentino. Dato de referencia estático
+// (no depende de ningún endpoint) — igual que en el script original.
+export const CEDEAR_TICKERS_LIST = [
+  'AABA', 'AAL', 'AAP', 'AAPL', 'ABBV', 'ABEV', 'ABEV3', 'ABNB', 'ABT', 'ACN',
+  'ACWI', 'ADBE', 'ADGO', 'ADI', 'ADP', 'ADS', 'AEG', 'AEM', 'AI', 'AIG',
+  'AKO.B', 'ALAB', 'AMAT', 'AMD', 'AMGN', 'AMX', 'AMZN', 'ANF', 'AOCA', 'ARCO',
+  'ARKK', 'ARM', 'ASML', 'ASR', 'ASTS', 'AUY', 'AVGO', 'AVY', 'AXP', 'AZN',
+  'BA', 'BABA', 'BAC', 'BAK', 'BAS', 'BAYN', 'BB', 'BBAS3', 'BBD', 'BBDC3',
+  'BBV', 'BCS', 'BHP', 'BIDU', 'BIIB', 'BIOX', 'BITF', 'BK', 'BKNG', 'BKR',
+  'BMNR', 'BMY', 'BNG', 'BP', 'BPA11', 'BRFS', 'BRK.B', 'BSBR', 'BSN', 'BX',
+  'C', 'CAAP', 'CAH', 'CAJ', 'CAR', 'CAT', 'CBRD', 'CCL', 'CDE', 'CEG',
+  'CL', 'CLS', 'COIN', 'COPX', 'COST', 'CRM', 'CRWV', 'CS', 'CSCO', 'CSNA3',
+  'CVS', 'CVX', 'CX', 'DAL', 'DD', 'DE', 'DECK', 'DEO', 'DHR', 'DIA',
+  'DIS', 'DOCU', 'DOW', 'DTEA', 'E', 'EA', 'EBAY', 'EBR', 'ECL', 'EEM',
+  'EFA', 'EFX', 'ELP', 'EOAN', 'EQNR', 'ERIC', 'ERJ', 'ESGU', 'ETHA', 'ETSY',
+  'EWJ', 'EWZ', 'F', 'FCX', 'FDX', 'FMCC', 'FMX', 'FNMA', 'FSLR', 'FXI',
+  'GDX', 'GE', 'GFI', 'GGB', 'GILD', 'GLD', 'GLOB', 'GLW', 'GM', 'GOLD',
+  'GOOGL', 'GPRK', 'GRMN', 'GS', 'GSK', 'GT', 'HAL', 'HAPV3', 'HD', 'HDB',
+  'HL', 'HMC', 'HMY', 'HNPIY', 'HOG', 'HON', 'HOOD', 'HPQ', 'HSBC', 'HSY',
+  'HUT', 'HWM', 'IBB', 'IBIT', 'IBM', 'IBN', 'IEMG', 'IEUR', 'IFF', 'IJH',
+  'ILF', 'INFY', 'ING', 'INTC', 'IP', 'IREN', 'ISRG', 'ITA', 'ITUB', 'ITUB3',
+  'IVE', 'IVV', 'IVW', 'IWM', 'JCI', 'JD', 'JMIA', 'JNJ', 'JOYY', 'JPM',
+  'KB', 'KEP', 'KGC', 'KMB', 'KO', 'KOFM', 'LAC', 'LAR', 'LFC', 'LLY',
+  'LMT', 'LND', 'LRCX', 'LREN3', 'LVS', 'LYG', 'MA', 'MBG', 'MBT', 'MCD',
+  'MDLZ', 'MDT', 'MELI', 'META', 'MFG', 'MGLU3', 'MMC', 'MMM', 'MO', 'MOS',
+  'MRK', 'MRNA', 'MRVL', 'MSFT', 'MSI', 'MSTR', 'MU', 'MUFG', 'MUX', 'NEM',
+  'NFLX', 'NG', 'NGG', 'NIO', 'NKE', 'NMR', 'NOKA', 'NOW', 'NSAN', 'NTCO',
+  'NTCO3', 'NTES', 'NU', 'NUE', 'NVDA', 'NVS', 'NXE', 'OKLO', 'ORAN', 'ORCL',
+  'ORLY', 'OXY', 'PAAS', 'PAC', 'PAGS', 'PANW', 'PATH', 'PBI', 'PBR', 'PCAR',
+  'PDD', 'PEP', 'PETR3', 'PFE', 'PG', 'PHG', 'PINS', 'PKS', 'PLTR', 'PM',
+  'PRIO3', 'PSO', 'PSQ', 'PSX', 'PTR', 'PYPL', 'QCOM', 'QQQ', 'RACE', 'RBLX',
+  'RENT3', 'RGTI', 'RIO', 'RIOT', 'RKLB', 'ROKU', 'ROST', 'RTX', 'SAN', 'SAP',
+  'SATL', 'SBS', 'SBSP3', 'SBUX', 'SCCO', 'SCHW', 'SE', 'SH', 'SHEL', 'SHOP',
+  'SID', 'SIEGY', 'SLB', 'SLV', 'SMH', 'SNA', 'SNAP', 'SNOW', 'SNP', 'SONY',
+  'SPCE', 'SPGI', 'SPOT', 'SPXL', 'SPY', 'STLA', 'STNE', 'SUZ', 'SUZB3', 'SWKS',
+  'SYY', 'T', 'TCOM', 'TEAM', 'TEFO', 'TEM', 'TEN', 'TGT', 'TIIAY', 'TIMB',
+  'TJX', 'TM', 'TMO', 'TMUS', 'TQQQ', 'TRIP', 'TRV', 'TSLA', 'TSM', 'TTE',
+  'TTM', 'TV', 'TWLO', 'TX', 'TXN', 'UAL', 'UBER', 'UGP', 'UL', 'UNH',
+  'UNP', 'UPST', 'URA', 'URBN', 'USB', 'USO', 'V', 'VALE', 'VALE3', 'VEA',
+  'VIG', 'VIST', 'VIV', 'VOD', 'VRSN', 'VRTX', 'VST', 'VZ', 'WBA', 'WFC',
+  'WMT', 'XLB', 'XLC', 'XLE', 'XLF', 'XLI', 'XLK', 'XLP', 'XLRE', 'XLU',
+  'XLV', 'XLY', 'XOM', 'XP', 'XPEV', 'XROX', 'XYZ', 'YELP', 'ZM',
+]
+
+export const CEDEAR_TICKERS = new Set(CEDEAR_TICKERS_LIST)

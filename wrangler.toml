@@ -1,0 +1,10 @@
+name = "vue-finanzas"
+compatibility_date = "2026-09-10"
+
+pages_build_output_dir = "dist"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "vue-finanzas-db"
+database_id = "8262aeee-f264-49d9-b0b9-43fd783af8df"
+
