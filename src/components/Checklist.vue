@@ -62,6 +62,10 @@ const SECTOR_CHECKLISTS = {
   'General': [
     { text: 'Tendencia alcista de largo plazo (precio sobre la EMA de 200)', weight: 3 },
     { text: 'Volumen y relativo de volumen (RVOL) por encima de la media operativa', weight: 4 }
+  ],
+  'Comunicacion': [
+    { text: 'Tendencia alcista de largo plazo (precio sobre la EMA de 200)', weight: 3 },
+    { text: 'Volumen y relativo de volumen (RVOL) por encima de la media operativa', weight: 4 }
   ]
 }
 
