@@ -10,16 +10,17 @@ backend/base de datos. Todo corre en un solo proyecto de Cloudflare.
 ```
 src/                    # Frontend Vue 3
 ├── App.vue             # Layout de 3 columnas, conecta todo
-├── components/         # SearchBar, FinanceTicker, StockPanel, AlertsPanel, Checklist, TradesModal, etc.
+├── components/         # SearchBar, FinanceTicker, StockPanel, AlertsPanel, Checklist, TradesModal, JournalModal, etc.
 ├── composables/        # Estado reactivo (useDolar, useStocks, useAlerts, useEarnings...)
 ├── data/                # Listas estáticas (tickers con CEDEAR, ranking S&P 500)
 └── services/            # Llamadas a APIs externas (Finnhub, dolarapi) y a /api (propio backend)
 
 functions/               # Backend: Cloudflare Pages Functions
 ├── api/[[route]].js     # Router único (Hono) para todo /api/*
-└── _lib/                # Lógica de cada recurso (alerts, watchlist, checklist, trades) usando D1
+└── _lib/                # Lógica de cada recurso (alerts, watchlist, checklist, trades, journal) usando D1
 
 schema.sql               # Definición de tablas D1 + seed inicial
+migrations/               # Migraciones puntuales para bases D1/SQLite ya existentes
 wrangler.toml             # Config de Cloudflare (build output, binding de D1)
 ```
 
@@ -78,9 +79,28 @@ Si preferís el hot-reload de Vite mientras programás el frontend, corré
 | Riesgo País | argentinadatos.com | En vivo, sin API key |
 | Acciones USA (AAPL, TSLA, etc.) | Finnhub | En vivo, requiere API key gratis |
 | CEDEARs (GGAL.BA, YPFD.BA, etc.) | Calculado | `(precio USD Finnhub ÷ ratio) × CCL`. Finnhub no cubre BYMA en el plan gratis. |
-| Alertas, checklist, trades, watchlist | Cloudflare D1 | Persistido en la base de datos propia, vía `/api/*` |
+| Alertas, checklist, trades, planilla profesional, watchlist | Cloudflare D1 | Persistido en la base de datos propia, vía `/api/*` |
 
 Los ratios de CEDEARs son editables desde la UI (campo "Ratio").
+
+## Rendimiento en pesos y en dólares (CCL) de tus CEDEARs
+
+La bitácora de trades ("📒 Mis Trades") calcula, para cada ticker, el
+resultado realizado y el costo promedio tanto en pesos como en dólares:
+
+- Cada operación guarda el **dólar CCL** vigente ese día (autocompletado: en
+  vivo vía dolarapi.com si la fecha es hoy, o histórico vía
+  api.argentinadatos.com si es una fecha pasada; siempre editable a mano).
+- Con eso, el costo y el resultado realizado de cada venta se calculan en
+  USD igual que en ARS (precio ARS ÷ CCL de ese día), usando costo promedio
+  ponderado (PPC).
+- Para las posiciones abiertas de CEDEARs, además se trae el precio actual
+  en vivo (data912.com) y se muestra el valor de mercado y el rendimiento
+  no realizado en ARS y en USD, igual que en el estado de cuenta de un
+  broker.
+
+Si a alguna operación de un ticker le falta el CCL, esa fila se muestra con
+"—" en vez de un número (en lugar de calcular mal), hasta que la completes.
 
 ## Notas sobre las alarmas de precio
 

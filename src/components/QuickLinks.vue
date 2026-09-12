@@ -8,6 +8,14 @@
       <span>📒 Mis Trades</span>
     </button>
 
+    <button
+      class="quick-link quick-link-journal"
+      :style="{ backgroundColor: '#1e1b4b', color: '#a5b4fc' }"
+      @click="$emit('open-journal')"
+    >
+      <span>📊 Planilla Pro</span>
+    </button>
+
     <a
       v-for="link in links"
       :key="link.name"
@@ -26,7 +34,7 @@
 </template>
 
 <script setup>
-defineEmits(['open-trades'])
+defineEmits(['open-trades', 'open-journal'])
 
 const links = [
   {
@@ -133,6 +141,11 @@ button.quick-link {
 .quick-link-trades {
   font-weight: 700;
   border-color: #0d5c53 !important;
+}
+
+.quick-link-journal {
+  font-weight: 700;
+  border-color: #3730a3 !important;
 }
 
 

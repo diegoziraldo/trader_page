@@ -9,6 +9,8 @@ function formatTrade(row) {
     price: row.price,
     fee: row.fee,
     notes: row.notes,
+    ccl: row.ccl,
+    priceUSD: row.ccl ? Math.round((row.price / row.ccl) * 10000) / 10000 : null,
     total:
       row.operation === 'COMPRA'
         ? row.quantity * row.price + row.fee
@@ -42,13 +44,14 @@ export async function create(db, body) {
   const quantity = Number(body.quantity);
   const price = Number(body.price);
   const fee = Number(body.fee) || 0;
+  const ccl = body.ccl != null && body.ccl !== '' ? Number(body.ccl) : null;
 
   const info = await db
     .prepare(
-      `INSERT INTO trades (trade_date, asset_type, ticker, operation, quantity, price, fee, notes)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO trades (trade_date, asset_type, ticker, operation, quantity, price, fee, notes, ccl)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
-    .bind(date, assetType, ticker, operation, quantity, price, fee, notes)
+    .bind(date, assetType, ticker, operation, quantity, price, fee, notes, ccl)
     .run();
 
   const created = await db.prepare('SELECT * FROM trades WHERE id = ?').bind(info.meta.last_row_id).first();
@@ -72,12 +75,15 @@ export async function update(db, id, body) {
 
   const fee = body.fee !== undefined ? Number(body.fee) : existing.fee;
   const notes = body.notes !== undefined ? body.notes : existing.notes;
+  const ccl = body.ccl !== undefined
+    ? (body.ccl === '' || body.ccl === null ? null : Number(body.ccl))
+    : existing.ccl;
 
   await db
     .prepare(
       `UPDATE trades SET
         trade_date = ?, asset_type = ?, ticker = ?, operation = ?,
-        quantity = ?, price = ?, fee = ?, notes = ?, updated_at = datetime('now')
+        quantity = ?, price = ?, fee = ?, notes = ?, ccl = ?, updated_at = datetime('now')
        WHERE id = ?`
     )
     .bind(
@@ -89,6 +95,7 @@ export async function update(db, id, body) {
       Number(merged.price),
       fee,
       notes,
+      ccl,
       id
     )
     .run();
@@ -102,9 +109,10 @@ export async function remove(db, id) {
   if (result.meta.changes === 0) throw { status: 404, message: 'Trade no encontrado' };
 }
 
-// Ganancias/pérdidas realizadas por costo promedio (PPC). Por cada ticker
-// mantenemos cantidad en cartera y costo promedio; en cada VENTA, la
-// ganancia/pérdida realizada es cantidad_vendida * (precio_venta - costo_promedio) - comisión.
+// Ganancias/pérdidas realizadas por costo promedio (PPC), calculado en
+// paralelo en PESOS y en DÓLARES (vía el CCL cargado en cada operación). Si
+// a alguna operación de un ticker le falta el CCL, ese ticker se marca como
+// "usdIncomplete" para no mostrar un número en USD que estaría mal.
 function computeSummary(trades) {
   const bySymbol = {};
 
@@ -117,26 +125,40 @@ function computeSummary(trades) {
         avgCost: 0,
         invested: 0,
         realizedPL: 0,
-        totalBought: 0,
-        totalSold: 0,
+        avgCostUSD: 0,
+        investedUSD: 0,
+        realizedPLUSD: 0,
+        usdIncomplete: false,
       };
     }
     const s = bySymbol[t.ticker];
 
+    const hasCCL = Number(t.ccl) > 0;
+    if (!hasCCL) s.usdIncomplete = true;
+    const priceUSD = hasCCL ? t.price / t.ccl : 0;
+    const feeUSD = hasCCL ? t.fee / t.ccl : 0;
+
     if (t.operation === 'COMPRA') {
       const costoPrevio = s.avgCost * s.quantity;
+      const costoPrevioUSD = s.avgCostUSD * s.quantity;
       const nuevaCantidad = s.quantity + t.quantity;
+
       const nuevoCosto = costoPrevio + t.quantity * t.price + t.fee;
+      const nuevoCostoUSD = costoPrevioUSD + t.quantity * priceUSD + feeUSD;
+
       s.avgCost = nuevaCantidad > 0 ? nuevoCosto / nuevaCantidad : 0;
+      s.avgCostUSD = nuevaCantidad > 0 ? nuevoCostoUSD / nuevaCantidad : 0;
       s.quantity = nuevaCantidad;
       s.invested = nuevoCosto;
-      s.totalBought += t.quantity * t.price + t.fee;
+      s.investedUSD = nuevoCostoUSD;
     } else {
       const pl = t.quantity * (t.price - s.avgCost) - t.fee;
+      const plUSD = t.quantity * (priceUSD - s.avgCostUSD) - feeUSD;
       s.realizedPL += pl;
+      s.realizedPLUSD += plUSD;
       s.quantity = Math.max(0, s.quantity - t.quantity);
       s.invested = s.avgCost * s.quantity;
-      s.totalSold += t.quantity * t.price - t.fee;
+      s.investedUSD = s.avgCostUSD * s.quantity;
     }
   }
 
@@ -146,11 +168,20 @@ function computeSummary(trades) {
     avgCost: Math.round(s.avgCost * 100) / 100,
     invested: Math.round(s.invested * 100) / 100,
     realizedPL: Math.round(s.realizedPL * 100) / 100,
+    avgCostUSD: s.usdIncomplete ? null : Math.round(s.avgCostUSD * 100) / 100,
+    investedUSD: s.usdIncomplete ? null : Math.round(s.investedUSD * 100) / 100,
+    realizedPLUSD: s.usdIncomplete ? null : Math.round(s.realizedPLUSD * 100) / 100,
   }));
 
   const totals = {
     realizedPL: Math.round(bySymbolList.reduce((acc, s) => acc + s.realizedPL, 0) * 100) / 100,
+    realizedPLUSD: Math.round(
+      bySymbolList.reduce((acc, s) => acc + (s.realizedPLUSD || 0), 0) * 100
+    ) / 100,
     invested: Math.round(bySymbolList.reduce((acc, s) => acc + s.invested, 0) * 100) / 100,
+    investedUSD: Math.round(
+      bySymbolList.reduce((acc, s) => acc + (s.investedUSD || 0), 0) * 100
+    ) / 100,
     openPositions: bySymbolList.filter((s) => s.quantity > 0).length,
     totalTrades: trades.length,
   };
@@ -159,6 +190,6 @@ function computeSummary(trades) {
 }
 
 export async function getSummary(db) {
-  const rows = (await getAll(db));
+  const rows = await getAll(db);
   return computeSummary(rows);
 }

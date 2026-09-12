@@ -1,5 +1,5 @@
 <script setup>
-import { ref, reactive, computed, onMounted, watch } from 'vue'
+import { ref, reactive, computed, onMounted, onUnmounted, watch } from 'vue'
 import {
   getTrades,
   getTradesSummary,
@@ -10,16 +10,43 @@ import {
 
 const emit = defineEmits(['close'])
 
+// =========================================================
+// CONFIGURACIÓN — mismas fuentes públicas que usa CclCalculator.vue
+// =========================================================
+const DOLARAPI_LIST_URL = 'https://dolarapi.com/v1/dolares'
+const CCL_REFRESH_MS = 60_000
+const CEDEARS_LIVE_URL = 'https://data912.com/live/arg_cedears'
+const CEDEARS_REFRESH_MS = 30_000
+// api.argentinadatos.com expone el CCL histórico día por día, así no hay
+// que tipearlo a mano para operaciones viejas.
+const HISTORICAL_CCL_BASE = 'https://api.argentinadatos.com/v1/cotizaciones/dolares/contadoconliqui'
+
 const trades = ref([])
+const summary = ref({
+  bySymbol: [],
+  totals: {
+    realizedPL: 0, realizedPLUSD: 0, invested: 0, investedUSD: 0,
+    openPositions: 0, totalTrades: 0,
+  },
+})
 const loading = ref(true)
 const errorMsg = ref('')
 const saving = ref(false)
 
-const editingId = ref(null)
+const editingId = ref(null) // null = modo "agregar", si no, id del trade en edición
 
-// Variables reactivas para simular el "Mercado en Vivo" (Dinamismo tipo Broker)
-const globalCcl = ref(1000) 
-const livePrices = ref({})
+// --- Dólar CCL en vivo (para "hoy" y para valuar posiciones abiertas) ---
+const cclActual = ref(null)
+let intervaloCclActual = null
+
+// --- Precios de CEDEARs en vivo (data912) ---
+const liveCedears = ref([])
+let intervaloCedears = null
+
+// --- Autocompletado del CCL en el formulario ---
+const cclLoading = ref(false)
+const cclIsAuto = ref(false)
+const cclMsg = ref('')
 
 function todayISO() {
   return new Date().toISOString().slice(0, 10)
@@ -34,8 +61,7 @@ function emptyForm() {
     quantity: '',
     price: '',
     fee: '',
-    ratio: '',
-    exchangeRate: '',
+    ccl: '',
     notes: '',
   }
 }
@@ -44,13 +70,20 @@ const form = reactive(emptyForm())
 const formError = ref('')
 
 function formatMoney(n) {
+  if (n === null || n === undefined || n === '') return '—'
   const num = Number(n) || 0
   return num.toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 }
 
+function formatNum(n, maxDigits = 4) {
+  if (n === null || n === undefined || n === '') return '—'
+  return Number(n).toLocaleString('es-AR', { maximumFractionDigits: maxDigits })
+}
+
 function formatPct(n) {
-  const num = Number(n) || 0
-  return num.toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + '%'
+  if (n === null || n === undefined) return '—'
+  const sign = n >= 0 ? '+' : ''
+  return `${sign}${n.toFixed(2)}%`
 }
 
 function formatDate(d) {
@@ -63,156 +96,47 @@ const sortedTrades = computed(() =>
   [...trades.value].sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : b.id - a.id))
 )
 
-const refUsdPrice = computed(() => {
-  if (form.assetType !== 'CEDEAR') return 0
-  const p = Number(form.price)
-  const r = Number(form.ratio)
-  const ccl = Number(form.exchangeRate)
-  if (p > 0 && r > 0 && ccl > 0) {
-    return (p * r) / ccl
-  }
-  return 0
-})
+// Posiciones abiertas con valor de mercado y rendimiento no realizado, en
+// ARS y en USD — como muestran los brokers en su panel de "cartera".
+const openPositions = computed(() =>
+  summary.value.bySymbol
+    .filter((s) => s.quantity > 0)
+    .map((s) => {
+      const livePrice = s.assetType === 'CEDEAR' ? getLivePrice(s.ticker) : null
+      const marketValueARS = livePrice != null ? s.quantity * livePrice : null
+      const unrealizedARS = marketValueARS != null ? marketValueARS - s.invested : null
+      const unrealizedARSPct =
+        marketValueARS != null && s.invested > 0 ? (unrealizedARS / s.invested) * 100 : null
 
-// Inicializa los precios en vivo basados en la última operación registrada
-function initializeLiveMarket() {
-  const chronoSorted = [...trades.value].sort((a, b) => new Date(a.date) - new Date(b.date) || a.id - b.id)
-  let lastCcl = globalCcl.value
-  
-  chronoSorted.forEach(t => {
-    livePrices.value[t.ticker] = t.price // Guarda el último precio conocido
-    if (t.assetType === 'CEDEAR' && t.exchangeRate) {
-      lastCcl = t.exchangeRate // Guarda el último CCL conocido
-    }
-  })
-  globalCcl.value = lastCcl
-}
+      const marketValueUSD =
+        marketValueARS != null && cclActual.value ? marketValueARS / cclActual.value : null
+      const unrealizedUSD =
+        marketValueUSD != null && !s.usdIncomplete && s.investedUSD != null
+          ? marketValueUSD - s.investedUSD
+          : null
+      const unrealizedUSDPct =
+        unrealizedUSD != null && s.investedUSD > 0 ? (unrealizedUSD / s.investedUSD) * 100 : null
 
-// MOTOR DE PORTAFOLIO EN VIVO (Calcula PPP, Realizado y No Realizado en ARS y USD)
-const portfolio = computed(() => {
-  const bySymbol = {}
-  
-  // 1. Reconstruir historial y calcular Costo Promedio Ponderado (PPP)
-  const sorted = [...trades.value].sort((a, b) => new Date(a.date) - new Date(b.date) || a.id - b.id)
-
-  sorted.forEach(t => {
-    if (!bySymbol[t.ticker]) {
-      bySymbol[t.ticker] = {
-        ticker: t.ticker,
-        assetType: t.assetType,
-        qty: 0,
-        costArs: 0,
-        costUsd: 0,
-        realizedPLArs: 0,
-        realizedPLUsd: 0,
+      return {
+        ...s,
+        livePrice,
+        marketValueARS,
+        unrealizedARS,
+        unrealizedARSPct,
+        marketValueUSD,
+        unrealizedUSD,
+        unrealizedUSDPct,
       }
-    }
-    
-    const s = bySymbol[t.ticker]
-    const isCedear = t.assetType === 'CEDEAR'
-    const cclTrade = t.exchangeRate || 1
-    const priceArs = t.price
-    const priceUsd = isCedear && cclTrade > 1 ? (t.price / cclTrade) : 0
-    const feeArs = t.fee || 0
-    const feeUsd = isCedear && cclTrade > 1 ? (feeArs / cclTrade) : 0
-
-    if (t.operation === 'COMPRA') {
-      s.qty += t.quantity
-      s.costArs += (priceArs * t.quantity) + feeArs
-      if (isCedear) s.costUsd += (priceUsd * t.quantity) + feeUsd
-    } else if (t.operation === 'VENTA') {
-      if (s.qty > 0) {
-        const avgCostArs = s.costArs / s.qty
-        const avgCostUsd = s.costUsd / s.qty
-        const soldQty = t.quantity
-        
-        const costOfSoldArs = avgCostArs * soldQty
-        const costOfSoldUsd = avgCostUsd * soldQty
-        
-        s.costArs -= costOfSoldArs
-        s.costUsd -= costOfSoldUsd
-        s.qty -= soldQty
-        
-        const revenueArs = priceArs * soldQty
-        const revenueUsd = isCedear ? (priceUsd * soldQty) : 0
-        
-        s.realizedPLArs += (revenueArs - costOfSoldArs - feeArs)
-        if (isCedear) s.realizedPLUsd += (revenueUsd - costOfSoldUsd - feeUsd)
-      }
-    }
-  })
-
-  // 2. Calcular rendimientos en vivo (Unrealized) basados en inputs reactivos
-  const openPositions = []
-  let totalInvestedArs = 0
-  let totalInvestedUsd = 0
-  let totalCurrentValueArs = 0
-  let totalCurrentValueUsd = 0
-  let totalRealizedArs = 0
-  let totalRealizedUsd = 0
-
-  Object.values(bySymbol).forEach(s => {
-    totalRealizedArs += s.realizedPLArs
-    totalRealizedUsd += s.realizedPLUsd
-
-    if (s.qty > 0) {
-      const isCedear = s.assetType === 'CEDEAR'
-      s.avgCostArs = s.costArs / s.qty
-      s.avgCostUsd = isCedear ? (s.costUsd / s.qty) : 0
-
-      // Precio actual reactivo
-      const currentPriceArs = livePrices.value[s.ticker] || 0
-      const currentPriceUsd = isCedear && globalCcl.value > 0 ? (currentPriceArs / globalCcl.value) : 0
-
-      s.currentValueArs = s.qty * currentPriceArs
-      s.currentValueUsd = isCedear ? s.qty * currentPriceUsd : 0
-
-      s.unrealizedPLArs = s.currentValueArs - s.costArs
-      s.unrealizedPLUsd = isCedear ? s.currentValueUsd - s.costUsd : 0
-
-      s.unrealizedPctArs = s.costArs > 0 ? (s.unrealizedPLArs / s.costArs) * 100 : 0
-      s.unrealizedPctUsd = s.costUsd > 0 ? (s.unrealizedPLUsd / s.costUsd) * 100 : 0
-
-      totalInvestedArs += s.costArs
-      totalInvestedUsd += s.costUsd
-      totalCurrentValueArs += s.currentValueArs
-      totalCurrentValueUsd += s.currentValueUsd
-
-      openPositions.push(s)
-    }
-  })
-
-  // Totales Globales
-  const totalUnrealizedArs = totalCurrentValueArs - totalInvestedArs
-  const totalUnrealizedUsd = totalCurrentValueUsd - totalInvestedUsd
-  const totalUnrealizedPctArs = totalInvestedArs > 0 ? (totalUnrealizedArs / totalInvestedArs) * 100 : 0
-  const totalUnrealizedPctUsd = totalInvestedUsd > 0 ? (totalUnrealizedUsd / totalInvestedUsd) * 100 : 0
-
-  return {
-    openPositions,
-    totals: {
-      investedArs: totalInvestedArs,
-      investedUsd: totalInvestedUsd,
-      currentValueArs: totalCurrentValueArs,
-      currentValueUsd: totalCurrentValueUsd,
-      unrealizedArs: totalUnrealizedArs,
-      unrealizedUsd: totalUnrealizedUsd,
-      unrealizedPctArs: totalUnrealizedPctArs,
-      unrealizedPctUsd: totalUnrealizedPctUsd,
-      realizedArs: totalRealizedArs,
-      realizedUsd: totalRealizedUsd,
-      count: openPositions.length
-    }
-  }
-})
+    })
+)
 
 async function loadAll() {
   loading.value = true
   errorMsg.value = ''
   try {
-    const [t] = await Promise.all([getTrades(), getTradesSummary().catch(() => {})])
+    const [t, s] = await Promise.all([getTrades(), getTradesSummary()])
     trades.value = t
-    initializeLiveMarket() // Setea los precios iniciales
+    summary.value = s
   } catch (e) {
     errorMsg.value = e.message
   } finally {
@@ -220,6 +144,109 @@ async function loadAll() {
   }
 }
 
+async function refreshSummary() {
+  try {
+    summary.value = await getTradesSummary()
+  } catch (e) {
+    console.error('Error refrescando el resumen', e)
+  }
+}
+
+// =========================================================
+// DÓLAR CCL — en vivo (dolarapi) e histórico (argentinadatos)
+// =========================================================
+async function fetchLiveCCL() {
+  const res = await fetch(DOLARAPI_LIST_URL)
+  if (!res.ok) throw new Error('No se pudo consultar dolarapi')
+  const lista = await res.json()
+  const ccl = lista.find((d) => d.casa === 'contadoconliqui')
+  return ccl && ccl.venta ? Number(ccl.venta) : null
+}
+
+async function fetchHistoricalCCL(dateStr) {
+  if (!dateStr) return null
+  const [y, m, d] = dateStr.split('-')
+  const res = await fetch(`${HISTORICAL_CCL_BASE}/${y}/${m}/${d}`)
+  if (!res.ok) return null // fin de semana / feriado / fecha sin dato
+  const data = await res.json()
+  const row = Array.isArray(data) ? data[0] : data
+  return row && row.venta ? Number(row.venta) : null
+}
+
+async function refreshLiveCCL() {
+  try {
+    const value = await fetchLiveCCL()
+    if (value) cclActual.value = value
+  } catch (e) {
+    console.error('No se pudo actualizar el CCL en vivo', e)
+  }
+}
+
+// Autocompleta el campo CCL del formulario: usa el valor en vivo si la
+// fecha es hoy, o el histórico de argentinadatos si es una fecha pasada.
+// Si el usuario ya lo editó a mano, no lo pisa hasta que cambie la fecha.
+async function autofillCCL() {
+  if (!cclIsAuto.value) return
+  cclLoading.value = true
+  cclMsg.value = ''
+  try {
+    let value = null
+    if (form.date === todayISO()) {
+      value = cclActual.value ?? (await fetchLiveCCL())
+    } else {
+      value = await fetchHistoricalCCL(form.date)
+    }
+    if (value) {
+      form.ccl = value
+    } else {
+      cclMsg.value = 'No hay cotización para esa fecha (fin de semana/feriado). Cargala a mano.'
+    }
+  } catch (e) {
+    cclMsg.value = 'No se pudo traer el CCL automáticamente. Cargalo a mano.'
+  } finally {
+    cclLoading.value = false
+  }
+}
+
+function onCclManualInput() {
+  cclIsAuto.value = false
+  cclMsg.value = ''
+}
+
+function refetchCCL() {
+  cclIsAuto.value = true
+  autofillCCL()
+}
+
+watch(
+  () => form.date,
+  () => {
+    cclIsAuto.value = true
+    autofillCCL()
+  }
+)
+
+// =========================================================
+// PRECIOS DE CEDEARs EN VIVO (data912.com, sin API key)
+// =========================================================
+async function loadLiveCedears() {
+  try {
+    const res = await fetch(CEDEARS_LIVE_URL)
+    if (!res.ok) throw new Error('Error consultando data912')
+    liveCedears.value = await res.json()
+  } catch (e) {
+    console.error('No se pudo cargar el precio en vivo de CEDEARs', e)
+  }
+}
+
+function getLivePrice(ticker) {
+  const found = liveCedears.value.find((item) => String(item.symbol).toUpperCase() === ticker)
+  return found && found.c ? Number(found.c) : null
+}
+
+// =========================================================
+// FORMULARIO
+// =========================================================
 function startEdit(trade) {
   editingId.value = trade.id
   form.date = trade.date
@@ -229,9 +256,12 @@ function startEdit(trade) {
   form.quantity = trade.quantity
   form.price = trade.price
   form.fee = trade.fee
-  form.ratio = trade.ratio || ''
-  form.exchangeRate = trade.exchangeRate || ''
+  form.ccl = trade.ccl ?? ''
   form.notes = trade.notes
+  // Al editar no pisamos el CCL ya cargado; si cambian la fecha, ahí sí
+  // se vuelve a buscar automáticamente.
+  cclIsAuto.value = false
+  cclMsg.value = ''
   formError.value = ''
 }
 
@@ -239,6 +269,9 @@ function cancelEdit() {
   editingId.value = null
   Object.assign(form, emptyForm())
   formError.value = ''
+  cclMsg.value = ''
+  cclIsAuto.value = true
+  autofillCCL()
 }
 
 async function submitForm() {
@@ -248,11 +281,6 @@ async function submitForm() {
   if (!(Number(form.quantity) > 0)) return (formError.value = 'La cantidad debe ser mayor a 0')
   if (!(Number(form.price) > 0)) return (formError.value = 'El precio debe ser mayor a 0')
 
-  if (form.assetType === 'CEDEAR') {
-    if (!(Number(form.ratio) > 0)) return (formError.value = 'Ingresá un Ratio válido para el CEDEAR')
-    if (!(Number(form.exchangeRate) > 0)) return (formError.value = 'Ingresá el tipo de cambio (Dólar CCL) al momento de operar')
-  }
-
   const payload = {
     date: form.date,
     assetType: form.assetType,
@@ -261,8 +289,7 @@ async function submitForm() {
     quantity: Number(form.quantity),
     price: Number(form.price),
     fee: Number(form.fee) || 0,
-    ratio: form.assetType === 'CEDEAR' ? Number(form.ratio) : 1,
-    exchangeRate: form.assetType === 'CEDEAR' ? Number(form.exchangeRate) : 1,
+    ccl: form.ccl === '' ? null : Number(form.ccl),
     notes: form.notes.trim(),
   }
 
@@ -275,10 +302,9 @@ async function submitForm() {
     } else {
       const created = await createTrade(payload)
       trades.value.push(created)
-      livePrices.value[created.ticker] = created.price // Actualiza el precio en vivo al comprar
-      if (created.assetType === 'CEDEAR') globalCcl.value = created.exchangeRate
     }
     cancelEdit()
+    await refreshSummary()
   } catch (e) {
     formError.value = e.message
   } finally {
@@ -293,6 +319,7 @@ async function removeTrade(trade) {
     await deleteTrade(trade.id)
     trades.value = trades.value.filter((t) => t.id !== trade.id)
     if (editingId.value === trade.id) cancelEdit()
+    await refreshSummary()
   } catch (e) {
     errorMsg.value = e.message
   }
@@ -308,6 +335,21 @@ function onOverlayClick(e) {
 
 onMounted(() => {
   loadAll()
+
+  refreshLiveCCL()
+  intervaloCclActual = setInterval(refreshLiveCCL, CCL_REFRESH_MS)
+
+  loadLiveCedears()
+  intervaloCedears = setInterval(loadLiveCedears, CEDEARS_REFRESH_MS)
+
+  // Primer autocompletado del CCL para el formulario "hoy" en blanco.
+  cclIsAuto.value = true
+  autofillCCL()
+})
+
+onUnmounted(() => {
+  if (intervaloCclActual) clearInterval(intervaloCclActual)
+  if (intervaloCedears) clearInterval(intervaloCedears)
 })
 </script>
 
@@ -316,126 +358,125 @@ onMounted(() => {
     <div class="trades-modal">
       <div class="trades-header">
         <div class="trades-title">
-          <span class="trades-icon">📈</span>
-          Portafolio y Bitácora de Trades
+          <span class="trades-icon">📒</span>
+          Bitácora de Trades
         </div>
         <button class="close-btn" @click="close" title="Cerrar">✕</button>
       </div>
 
-      <div v-if="loading" class="trades-loading">Cargando datos...</div>
+      <div v-if="loading" class="trades-loading">Cargando bitácora...</div>
 
       <template v-else>
         <div v-if="errorMsg" class="trades-error">{{ errorMsg }}</div>
 
-        <!-- DASHBOARD TIPO BROKER -->
-        <div class="market-controls">
-          <div class="live-indicator">
-            <span class="pulse-dot"></span> Simulación en Vivo
-          </div>
-          <div class="ccl-input-wrap">
-            <label>Dólar CCL Actual:</label>
-            <div class="input-prefix">
-              <span>$</span>
-              <input type="number" v-model="globalCcl" step="any" class="ccl-input" title="Ajustá el CCL actual para recalcular tu portafolio en USD">
-            </div>
-          </div>
-        </div>
-
+        <!-- Resumen general -->
         <div class="summary-bar">
-          <div class="summary-card highlight-card">
-            <span class="summary-label">Valorizado Total</span>
-            <div class="card-values">
-              <strong>${{ formatMoney(portfolio.totals.currentValueArs) }}</strong>
-              <span class="usd-value text-dim">U$D {{ formatMoney(portfolio.totals.currentValueUsd) }}</span>
-            </div>
+          <div class="summary-card">
+            <span class="summary-label">Resultado realizado (ARS)</span>
+            <strong :class="summary.totals.realizedPL >= 0 ? 'pl-pos' : 'pl-neg'">
+              {{ summary.totals.realizedPL >= 0 ? '+' : '' }}${{ formatMoney(summary.totals.realizedPL) }}
+            </strong>
           </div>
           <div class="summary-card">
-            <span class="summary-label">Ganancia Actual (Abierta)</span>
-            <div class="card-values">
-              <strong :class="portfolio.totals.unrealizedArs >= 0 ? 'pl-pos' : 'pl-neg'">
-                {{ portfolio.totals.unrealizedArs >= 0 ? '+' : '' }}${{ formatMoney(portfolio.totals.unrealizedArs) }} ({{ formatPct(portfolio.totals.unrealizedPctArs) }})
-              </strong>
-              <span class="usd-value" :class="portfolio.totals.unrealizedUsd >= 0 ? 'pl-pos' : 'pl-neg'">
-                {{ portfolio.totals.unrealizedUsd >= 0 ? '+' : '' }}U$D {{ formatMoney(portfolio.totals.unrealizedUsd) }} ({{ formatPct(portfolio.totals.unrealizedPctUsd) }})
-              </span>
-            </div>
+            <span class="summary-label">Resultado realizado (USD)</span>
+            <strong :class="summary.totals.realizedPLUSD >= 0 ? 'pl-pos' : 'pl-neg'">
+              {{ summary.totals.realizedPLUSD >= 0 ? '+' : '' }}US${{ formatMoney(summary.totals.realizedPLUSD) }}
+            </strong>
           </div>
           <div class="summary-card">
-            <span class="summary-label">Capital Invertido</span>
-            <div class="card-values">
-              <strong>${{ formatMoney(portfolio.totals.investedArs) }}</strong>
-              <span class="usd-value text-dim">U$D {{ formatMoney(portfolio.totals.investedUsd) }}</span>
-            </div>
+            <span class="summary-label">Invertido (posiciones abiertas)</span>
+            <strong>${{ formatMoney(summary.totals.invested) }}</strong>
           </div>
           <div class="summary-card">
-            <span class="summary-label">Ganancia Histórica (Cerrada)</span>
-            <div class="card-values">
-              <strong :class="portfolio.totals.realizedArs >= 0 ? 'pl-pos' : 'pl-neg'">
-                {{ portfolio.totals.realizedArs >= 0 ? '+' : '' }}${{ formatMoney(portfolio.totals.realizedArs) }}
-              </strong>
-              <span v-if="portfolio.totals.realizedUsd !== 0" class="usd-value" :class="portfolio.totals.realizedUsd >= 0 ? 'pl-pos' : 'pl-neg'">
-                {{ portfolio.totals.realizedUsd >= 0 ? '+' : '' }}U$D {{ formatMoney(portfolio.totals.realizedUsd) }}
-              </span>
-            </div>
+            <span class="summary-label">Posiciones abiertas</span>
+            <strong>{{ summary.totals.openPositions }}</strong>
+          </div>
+          <div class="summary-card">
+            <span class="summary-label">Operaciones cargadas</span>
+            <strong>{{ summary.totals.totalTrades }}</strong>
+          </div>
+          <div class="summary-card">
+            <span class="summary-label">CCL actual (referencia)</span>
+            <strong>{{ cclActual ? `$${formatMoney(cclActual)}` : '—' }}</strong>
           </div>
         </div>
 
-        <!-- TABLA DE TENENCIAS (PORTAFOLIO) -->
-        <div v-if="portfolio.openPositions.length" class="by-symbol-section">
-          <div class="section-title">Mis Tenencias ({{ portfolio.totals.count }})</div>
+        <!-- Posiciones abiertas: valor de mercado y rendimiento no realizado -->
+        <div v-if="openPositions.length" class="by-symbol-section">
+          <div class="section-title">Posiciones abiertas — valor de mercado</div>
           <div class="by-symbol-table-wrap">
             <table class="by-symbol-table">
               <thead>
                 <tr>
-                  <th>Activo</th>
-                  <th class="text-right">Tenencia</th>
-                  <th class="text-right">PPP (Costo Prom)</th>
-                  <th class="text-right" style="width: 140px;">Cotización Actual</th>
-                  <th class="text-right">Valorizado</th>
-                  <th class="text-right">Ganancia ARS</th>
-                  <th class="text-right">Ganancia USD</th>
+                  <th>Ticker</th>
+                  <th>Cantidad</th>
+                  <th>Costo prom. (ARS)</th>
+                  <th title="Precio en vivo, solo CEDEARs (data912)">Precio actual (ARS)</th>
+                  <th>Valor actual (ARS)</th>
+                  <th>Rendimiento (ARS)</th>
+                  <th>Valor actual (USD)</th>
+                  <th>Rendimiento (USD)</th>
                 </tr>
               </thead>
               <tbody>
-                <tr v-for="s in portfolio.openPositions" :key="s.ticker">
-                  <td>
-                    <div style="display:flex; flex-direction:column; gap:2px;">
-                      <span class="ticker-cell">{{ s.ticker }}</span>
-                      <span class="badge" :class="s.assetType === 'CEDEAR' ? 'badge-cedear' : 'badge-ar'">{{ s.assetType === 'CEDEAR' ? 'CEDEAR' : 'AR' }}</span>
-                    </div>
+                <tr v-for="p in openPositions" :key="p.ticker">
+                  <td class="ticker-cell">{{ p.ticker }}</td>
+                  <td>{{ formatNum(p.quantity) }}</td>
+                  <td>${{ formatMoney(p.avgCost) }}</td>
+                  <td>{{ p.livePrice != null ? `$${formatMoney(p.livePrice)}` : '—' }}</td>
+                  <td>{{ p.marketValueARS != null ? `$${formatMoney(p.marketValueARS)}` : '—' }}</td>
+                  <td v-if="p.unrealizedARS === null">—</td>
+                  <td v-else :class="p.unrealizedARS >= 0 ? 'pl-pos' : 'pl-neg'">
+                    {{ p.unrealizedARS >= 0 ? '+' : '' }}${{ formatMoney(p.unrealizedARS) }}
+                    <span class="pct-tag">({{ formatPct(p.unrealizedARSPct) }})</span>
                   </td>
-                  <td class="text-right font-num">{{ s.qty }}</td>
-                  <td class="text-right font-num">
-                    ${{ formatMoney(s.avgCostArs) }}
-                    <div v-if="s.assetType === 'CEDEAR'" class="text-dim text-xs">U$D {{ formatMoney(s.avgCostUsd) }}</div>
+                  <td>{{ p.marketValueUSD != null ? `US$${formatMoney(p.marketValueUSD)}` : '—' }}</td>
+                  <td v-if="p.unrealizedUSD === null">—</td>
+                  <td v-else :class="p.unrealizedUSD >= 0 ? 'pl-pos' : 'pl-neg'">
+                    {{ p.unrealizedUSD >= 0 ? '+' : '' }}US${{ formatMoney(p.unrealizedUSD) }}
+                    <span class="pct-tag">({{ formatPct(p.unrealizedUSDPct) }})</span>
                   </td>
-                  <td class="text-right">
-                    <div class="live-input-container">
-                      <span>$</span>
-                      <input type="number" v-model="livePrices[s.ticker]" class="live-price-input" step="any">
-                    </div>
-                    <div v-if="s.assetType === 'CEDEAR'" class="text-dim text-xs mt-1">
-                      U$D {{ formatMoney((livePrices[s.ticker] || 0) / globalCcl) }}
-                    </div>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="table-hint">
+            Precio en vivo solo para CEDEARs (fuente: data912.com, cada 30s). Para acciones argentinas
+            todavía no hay precio en vivo conectado acá.
+          </div>
+        </div>
+
+        <!-- Resumen por ticker (histórico, incluye posiciones cerradas) -->
+        <div v-if="summary.bySymbol.length" class="by-symbol-section">
+          <div class="section-title">Resultado por ticker (histórico)</div>
+          <div class="by-symbol-table-wrap">
+            <table class="by-symbol-table">
+              <thead>
+                <tr>
+                  <th>Ticker</th>
+                  <th>Tipo</th>
+                  <th>Cantidad</th>
+                  <th>Costo prom. (ARS)</th>
+                  <th>Costo prom. (USD)</th>
+                  <th>P&L realizado (ARS)</th>
+                  <th>P&L realizado (USD)</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="s in summary.bySymbol" :key="s.ticker">
+                  <td class="ticker-cell">{{ s.ticker }}</td>
+                  <td><span class="badge" :class="s.assetType === 'CEDEAR' ? 'badge-cedear' : 'badge-ar'">{{ s.assetType === 'CEDEAR' ? 'CEDEAR' : 'Acción AR' }}</span></td>
+                  <td>{{ formatNum(s.quantity) }}</td>
+                  <td>${{ formatMoney(s.avgCost) }}</td>
+                  <td :title="s.usdIncomplete ? 'Faltan cargar CCL en alguna operación de este ticker' : ''">
+                    {{ s.usdIncomplete ? '—' : `US$${formatMoney(s.avgCostUSD)}` }}
                   </td>
-                  <td class="text-right font-num">
-                    <strong>${{ formatMoney(s.currentValueArs) }}</strong>
-                    <div v-if="s.assetType === 'CEDEAR'" class="text-dim text-xs">U$D {{ formatMoney(s.currentValueUsd) }}</div>
+                  <td :class="s.realizedPL >= 0 ? 'pl-pos' : 'pl-neg'">
+                    {{ s.realizedPL >= 0 ? '+' : '' }}${{ formatMoney(s.realizedPL) }}
                   </td>
-                  <td class="text-right font-num" :class="s.unrealizedPLArs >= 0 ? 'pl-pos' : 'pl-neg'">
-                    <strong>{{ s.unrealizedPLArs >= 0 ? '+' : '' }}${{ formatMoney(s.unrealizedPLArs) }}</strong>
-                    <div class="text-xs">{{ s.unrealizedPLArs >= 0 ? '+' : '' }}{{ formatPct(s.unrealizedPctArs) }}</div>
-                  </td>
-                  <td class="text-right font-num">
-                    <template v-if="s.assetType === 'CEDEAR'">
-                      <strong :class="s.unrealizedPLUsd >= 0 ? 'pl-pos' : 'pl-neg'">
-                        {{ s.unrealizedPLUsd >= 0 ? '+' : '' }}U$D {{ formatMoney(s.unrealizedPLUsd) }}
-                      </strong>
-                      <div :class="s.unrealizedPLUsd >= 0 ? 'pl-pos' : 'pl-neg'" class="text-xs">
-                        {{ s.unrealizedPLUsd >= 0 ? '+' : '' }}{{ formatPct(s.unrealizedPctUsd) }}
-                      </div>
-                    </template>
-                    <span v-else class="text-dim">—</span>
+                  <td v-if="s.usdIncomplete" :title="'Faltan cargar CCL en alguna operación de este ticker'">—</td>
+                  <td v-else :class="s.realizedPLUSD >= 0 ? 'pl-pos' : 'pl-neg'">
+                    {{ s.realizedPLUSD >= 0 ? '+' : '' }}US${{ formatMoney(s.realizedPLUSD) }}
                   </td>
                 </tr>
               </tbody>
@@ -443,7 +484,7 @@ onMounted(() => {
           </div>
         </div>
 
-        <!-- FORMULARIO DE TRADES -->
+        <!-- Formulario alta / edición -->
         <form class="trade-form" @submit.prevent="submitForm">
           <div class="section-title">{{ editingId ? 'Editar operación' : 'Nueva operación' }}</div>
           <div class="form-grid">
@@ -460,7 +501,7 @@ onMounted(() => {
             </div>
             <div class="form-field">
               <label>Ticker</label>
-              <input type="text" v-model="form.ticker" placeholder="Ej: AAPL" style="text-transform:uppercase" required>
+              <input type="text" v-model="form.ticker" placeholder="Ej: KO, GGAL" style="text-transform:uppercase" required>
             </div>
             <div class="form-field">
               <label>Operación</label>
@@ -471,31 +512,32 @@ onMounted(() => {
             </div>
             <div class="form-field">
               <label>Cantidad</label>
-              <input type="number" min="0" step="any" v-model="form.quantity" placeholder="Ej: 10" required>
+              <input type="number" min="0" step="any" v-model="form.quantity" placeholder="Ej: 100" required>
             </div>
             <div class="form-field">
               <label>Precio unitario ($)</label>
-              <input type="number" min="0" step="any" v-model="form.price" placeholder="Ej: 15000" required>
+              <input type="number" min="0" step="any" v-model="form.price" placeholder="Ej: 5230" required>
             </div>
-            
-            <template v-if="form.assetType === 'CEDEAR'">
-              <div class="form-field">
-                <label>Ratio</label>
-                <input type="number" min="0.01" step="any" v-model="form.ratio" placeholder="Ej: 10">
-              </div>
-              <div class="form-field">
-                <label>Dólar CCL ($)</label>
-                <input type="number" min="0" step="any" v-model="form.exchangeRate" placeholder="Ej: 1250">
-              </div>
-              <div class="form-field">
-                <label>Ref. Acción (USD)</label>
-                <input type="text" :value="refUsdPrice ? 'U$D ' + refUsdPrice.toFixed(2) : '—'" disabled class="input-disabled">
-              </div>
-            </template>
-
             <div class="form-field">
               <label>Comisión ($)</label>
               <input type="number" min="0" step="any" v-model="form.fee" placeholder="Opcional">
+            </div>
+            <div class="form-field">
+              <label>
+                Dólar CCL del día
+                <span v-if="cclLoading" class="auto-tag">(buscando...)</span>
+                <span v-else-if="cclIsAuto && form.ccl" class="auto-tag">(automático)</span>
+              </label>
+              <div class="ccl-input-row">
+                <input
+                  type="number" min="0" step="any"
+                  v-model="form.ccl"
+                  @input="onCclManualInput"
+                  placeholder="Ej: 1320.50"
+                >
+                <button type="button" class="icon-btn" title="Volver a buscar el CCL de esta fecha" @click="refetchCCL">🔄</button>
+              </div>
+              <div v-if="cclMsg" class="ccl-hint">{{ cclMsg }}</div>
             </div>
             <div class="form-field form-field-wide">
               <label>Notas</label>
@@ -513,21 +555,22 @@ onMounted(() => {
           </div>
         </form>
 
-        <!-- HISTORIAL DE TRADES -->
-        <div class="section-title">Historial de Movimientos</div>
+        <!-- Tabla de operaciones -->
+        <div class="section-title">Historial ({{ trades.length }})</div>
         <div class="trades-table-wrap">
           <table class="trades-table" v-if="sortedTrades.length">
             <thead>
               <tr>
                 <th>Fecha</th>
+                <th>Activo</th>
                 <th>Ticker</th>
-                <th>Oper.</th>
-                <th class="text-right">Cant.</th>
-                <th class="text-right">Precio ARS</th>
-                <th class="text-right">CCL</th>
-                <th class="text-right">Acción USD</th>
-                <th class="text-right">Total USD</th>
-                <th class="text-right">Total ARS</th>
+                <th>Operación</th>
+                <th>Cantidad</th>
+                <th>Precio (ARS)</th>
+                <th>CCL</th>
+                <th>Precio (USD)</th>
+                <th>Comisión</th>
+                <th>Total</th>
                 <th>Notas</th>
                 <th></th>
               </tr>
@@ -535,22 +578,15 @@ onMounted(() => {
             <tbody>
               <tr v-for="t in sortedTrades" :key="t.id" :class="{ 'row-editing': editingId === t.id }">
                 <td>{{ formatDate(t.date) }}</td>
-                <td>
-                  <div style="display:flex; flex-direction:column; gap:2px;">
-                    <span class="ticker-cell">{{ t.ticker }}</span>
-                    <span class="badge" :class="t.assetType === 'CEDEAR' ? 'badge-cedear' : 'badge-ar'">{{ t.assetType === 'CEDEAR' ? 'CEDEAR' : 'AR' }}</span>
-                  </div>
-                </td>
+                <td><span class="badge" :class="t.assetType === 'CEDEAR' ? 'badge-cedear' : 'badge-ar'">{{ t.assetType === 'CEDEAR' ? 'CEDEAR' : 'Acción AR' }}</span></td>
+                <td class="ticker-cell">{{ t.ticker }}</td>
                 <td><span class="badge" :class="t.operation === 'COMPRA' ? 'badge-buy' : 'badge-sell'">{{ t.operation === 'COMPRA' ? 'Compra' : 'Venta' }}</span></td>
-                <td class="text-right font-num">{{ t.quantity }}</td>
-                <td class="text-right font-num">${{ formatMoney(t.price) }}</td>
-                <td class="text-right font-num text-dim">{{ t.assetType === 'CEDEAR' && t.exchangeRate ? '$' + formatMoney(t.exchangeRate) : '—' }}</td>
-                <td class="text-right font-num text-dim">{{ t.assetType === 'CEDEAR' && t.exchangeRate && t.ratio ? 'U$D ' + formatMoney((t.price * t.ratio) / t.exchangeRate) : '—' }}</td>
-                <td class="text-right font-num">
-                  <strong v-if="t.assetType === 'CEDEAR' && t.exchangeRate">U$D {{ formatMoney(((t.price * t.quantity) + (t.operation === 'COMPRA' ? (t.fee||0) : -(t.fee||0))) / t.exchangeRate) }}</strong>
-                  <span v-else class="text-dim">—</span>
-                </td>
-                <td class="text-right font-num">${{ formatMoney(t.total || ((t.price * t.quantity) + (t.operation === 'COMPRA' ? (t.fee||0) : -(t.fee||0)))) }}</td>
+                <td>{{ formatNum(t.quantity) }}</td>
+                <td>${{ formatMoney(t.price) }}</td>
+                <td>{{ t.ccl ? `$${formatMoney(t.ccl)}` : '—' }}</td>
+                <td>{{ t.priceUSD != null ? `US$${formatMoney(t.priceUSD)}` : '—' }}</td>
+                <td>${{ formatMoney(t.fee) }}</td>
+                <td>${{ formatMoney(t.total) }}</td>
                 <td class="notes-cell" :title="t.notes">{{ t.notes || '—' }}</td>
                 <td class="actions-cell">
                   <button class="icon-btn" title="Editar" @click="startEdit(t)">✎</button>
@@ -572,11 +608,10 @@ onMounted(() => {
   inset: 0;
   background: rgba(0, 0, 0, 0.6);
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: center;
-  padding: 4vh 16px;
   z-index: 1000;
-  overflow-y: auto;
+  padding: 20px;
 }
 
 .trades-modal {
@@ -584,7 +619,9 @@ onMounted(() => {
   border: 1px solid var(--border);
   border-radius: 12px;
   width: 100%;
-  max-width: 1200px;
+  max-width: 1180px;
+  max-height: 92vh;
+  overflow-y: auto;
   padding: 20px;
   display: flex;
   flex-direction: column;
@@ -600,7 +637,7 @@ onMounted(() => {
 }
 
 .trades-title {
-  font-size: 18px;
+  font-size: 16px;
   font-weight: 700;
   color: var(--text);
   display: flex;
@@ -642,97 +679,20 @@ onMounted(() => {
   font-size: 12px;
 }
 
-/* Market Controls (Dynamism) */
-.market-controls {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  background: rgba(37, 99, 235, 0.05);
-  border: 1px solid rgba(37, 99, 235, 0.2);
-  padding: 10px 16px;
-  border-radius: 8px;
-}
-
-.live-indicator {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 12px;
-  font-weight: 600;
-  color: #3b82f6;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-}
-
-.pulse-dot {
-  width: 8px;
-  height: 8px;
-  background-color: #3b82f6;
-  border-radius: 50%;
-  animation: pulse 2s infinite;
-}
-
-@keyframes pulse {
-  0% { box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.7); }
-  70% { box-shadow: 0 0 0 6px rgba(59, 130, 246, 0); }
-  100% { box-shadow: 0 0 0 0 rgba(59, 130, 246, 0); }
-}
-
-.ccl-input-wrap {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  font-size: 12px;
-  color: var(--text-dim);
-  font-weight: 600;
-}
-
-.input-prefix {
-  display: flex;
-  align-items: center;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 0 8px;
-}
-
-.input-prefix span {
-  color: var(--text-dim);
-  font-weight: 700;
-}
-
-.ccl-input {
-  background: transparent;
-  border: none;
-  color: var(--text);
-  font-size: 14px;
-  font-weight: 700;
-  font-family: var(--font-num, inherit);
-  padding: 6px 4px;
-  width: 80px;
-  outline: none;
-}
-
-/* Summary Bar */
 .summary-bar {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 10px;
 }
 
 .summary-card {
   background: var(--bg);
   border: 1px solid var(--border);
   border-radius: 8px;
-  padding: 12px 14px;
+  padding: 10px 12px;
   display: flex;
   flex-direction: column;
-  gap: 6px;
-}
-
-.highlight-card {
-  background: rgba(37, 99, 235, 0.05);
-  border-color: rgba(37, 99, 235, 0.3);
+  gap: 4px;
 }
 
 .summary-label {
@@ -740,32 +700,13 @@ onMounted(() => {
   color: var(--text-dim);
   text-transform: uppercase;
   letter-spacing: 0.5px;
-  font-weight: 700;
 }
 
-.card-values {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.card-values strong {
-  font-size: 18px;
+.summary-card strong {
+  font-size: 16px;
   color: var(--text);
   font-family: var(--font-num, inherit);
 }
-
-.usd-value {
-  font-size: 13px;
-  font-weight: 600;
-  font-family: var(--font-num, inherit);
-}
-
-.text-dim { color: var(--text-dim); }
-.text-xs { font-size: 11px; }
-.mt-1 { margin-top: 2px; }
-.text-right { text-align: right !important; }
-.font-num { font-family: var(--font-num, inherit); }
 
 .section-title {
   font-size: 11px;
@@ -792,7 +733,7 @@ onMounted(() => {
 .by-symbol-table th,
 .trades-table th {
   text-align: left;
-  padding: 10px 12px;
+  padding: 8px 10px;
   background: var(--bg);
   color: var(--text-dim);
   font-weight: 600;
@@ -805,61 +746,43 @@ onMounted(() => {
 
 .by-symbol-table td,
 .trades-table td {
-  padding: 10px 12px;
+  padding: 8px 10px;
   border-bottom: 1px solid var(--border);
   color: var(--text);
   white-space: nowrap;
-  vertical-align: middle;
+  font-family: var(--font-num, inherit);
 }
 
-.trades-table tbody tr:hover,
-.by-symbol-table tbody tr:hover {
-  background: rgba(0,0,0,0.02);
+.trades-table tbody tr:last-child td,
+.by-symbol-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.trades-table tbody tr:hover {
+  background: var(--bg);
+}
+
+.table-hint {
+  font-size: 11px;
+  color: var(--text-dim);
+  padding: 2px 2px 0;
+}
+
+.pct-tag {
+  font-size: 10px;
+  opacity: 0.85;
 }
 
 .row-editing {
-  background: rgba(37, 99, 235, 0.08) !important;
+  background: rgba(37, 99, 235, 0.08);
 }
 
-.ticker-cell { font-weight: 700; font-size: 13px; }
-
-/* Live Input in Table */
-.live-input-container {
-  display: inline-flex;
-  align-items: center;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 0 6px;
-  transition: all 0.2s;
-}
-
-.live-input-container:focus-within {
-  border-color: #3b82f6;
-  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2);
-}
-
-.live-input-container span {
-  color: var(--text-dim);
-  font-size: 12px;
-  font-weight: 600;
-}
-
-.live-price-input {
-  background: transparent;
-  border: none;
-  color: var(--text);
-  font-size: 13px;
+.ticker-cell {
   font-weight: 700;
-  font-family: var(--font-num, inherit);
-  padding: 6px 4px;
-  width: 75px;
-  text-align: right;
-  outline: none;
 }
 
 .notes-cell {
-  max-width: 140px;
+  max-width: 160px;
   overflow: hidden;
   text-overflow: ellipsis;
   font-family: inherit;
@@ -868,26 +791,44 @@ onMounted(() => {
 
 .badge {
   display: inline-block;
-  padding: 2px 6px;
-  border-radius: 4px;
-  font-size: 9px;
-  font-weight: 800;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
   text-transform: uppercase;
-  width: fit-content;
 }
 
-.badge-cedear { background: rgba(59, 130, 246, 0.15); color: #3b82f6; }
-.badge-ar { background: rgba(168, 85, 247, 0.15); color: #a855f7; }
-.badge-buy { background: rgba(34, 197, 94, 0.15); color: #16a34a; }
-.badge-sell { background: rgba(239, 68, 68, 0.15); color: #dc2626; }
+.badge-cedear {
+  background: rgba(59, 130, 246, 0.15);
+  color: #60a5fa;
+}
 
-.pl-pos { color: #16a34a !important; }
-.pl-neg { color: #dc2626 !important; }
+.badge-ar {
+  background: rgba(168, 85, 247, 0.15);
+  color: #c084fc;
+}
+
+.badge-buy {
+  background: rgba(34, 197, 94, 0.15);
+  color: #22c55e;
+}
+
+.badge-sell {
+  background: rgba(239, 68, 68, 0.15);
+  color: #ef4444;
+}
+
+.pl-pos {
+  color: #22c55e !important;
+}
+
+.pl-neg {
+  color: #ef4444 !important;
+}
 
 .actions-cell {
   display: flex;
   gap: 6px;
-  justify-content: flex-end;
 }
 
 .icon-btn {
@@ -901,8 +842,15 @@ onMounted(() => {
   font-size: 12px;
 }
 
-.icon-btn:hover { color: var(--text); border-color: var(--text-dim); }
-.icon-btn-danger:hover { color: #ef4444; border-color: #ef4444; }
+.icon-btn:hover {
+  color: var(--text);
+  border-color: var(--text-dim);
+}
+
+.icon-btn-danger:hover {
+  color: #ef4444;
+  border-color: #ef4444;
+}
 
 .trade-form {
   background: var(--bg);
@@ -916,7 +864,7 @@ onMounted(() => {
 
 .form-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
   gap: 10px;
 }
 
@@ -927,12 +875,38 @@ onMounted(() => {
   min-width: 0;
 }
 
-.form-field-wide { grid-column: span 2; }
+.form-field-wide {
+  grid-column: span 2;
+}
 
 .form-field label {
   font-size: 10px;
   color: var(--text-dim);
   font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.auto-tag {
+  color: #22c55e;
+  font-weight: 600;
+  text-transform: none;
+}
+
+.ccl-input-row {
+  display: flex;
+  gap: 6px;
+}
+
+.ccl-input-row input {
+  flex: 1;
+  min-width: 0;
+}
+
+.ccl-hint {
+  font-size: 10px;
+  color: #fbbf24;
 }
 
 .form-field input,
@@ -940,7 +914,7 @@ onMounted(() => {
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 6px;
-  padding: 8px;
+  padding: 6px 8px;
   color: var(--text);
   font-size: 12px;
   font-family: inherit;
@@ -950,15 +924,7 @@ onMounted(() => {
 .form-field input:focus,
 .form-field select:focus {
   outline: none;
-  border-color: #3b82f6;
-}
-
-.input-disabled {
-  background: var(--bg) !important;
-  color: var(--text-dim) !important;
-  cursor: not-allowed;
-  border-color: var(--border) !important;
-  font-weight: 600;
+  border-color: var(--blue, #2563eb);
 }
 
 .form-actions {
@@ -967,8 +933,8 @@ onMounted(() => {
 }
 
 .btn-primary {
-  background: #3b82f6;
-  border: 1px solid #3b82f6;
+  background: #2563eb;
+  border: 1px solid #2563eb;
   color: white;
   border-radius: 6px;
   padding: 8px 16px;
@@ -977,8 +943,14 @@ onMounted(() => {
   cursor: pointer;
 }
 
-.btn-primary:hover { background: #2563eb; }
-.btn-primary:disabled { opacity: 0.6; cursor: not-allowed; }
+.btn-primary:hover {
+  background: #1d4ed8;
+}
+
+.btn-primary:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
 
 .btn-secondary {
   background: var(--panel);
@@ -991,12 +963,22 @@ onMounted(() => {
   cursor: pointer;
 }
 
-.btn-secondary:hover { color: var(--text); border-color: var(--text-dim); }
+.btn-secondary:hover {
+  color: var(--text);
+  border-color: var(--text-dim);
+}
 
-@media (max-width: 768px) {
-  .trades-overlay { padding: 0; }
-  .trades-modal { max-width: 100%; height: 100vh; border-radius: 0; }
-  .form-field-wide { grid-column: span 1; }
-  .market-controls { flex-direction: column; align-items: flex-start; gap: 10px; }
+@media (max-width: 600px) {
+  .trades-overlay {
+    padding: 0;
+  }
+  .trades-modal {
+    max-width: 100%;
+    height: 100vh;
+    border-radius: 0;
+  }
+  .form-field-wide {
+    grid-column: span 1;
+  }
 }
 </style>

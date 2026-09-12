@@ -22,7 +22,7 @@ const SECTOR_CHECKLISTS = {
     { text: 'Tendencia alcista de largo plazo (precio sobre la EMA de 200)', weight: 3 },
     { text: 'Volumen y RVOL por encima de la media, con foco en earnings/guidance', weight: 4 },
     { text: 'Crecimiento de ingresos y margenes sostenido (ultimos trimestres)', weight: 4 },
-    { text: 'Golden Cross(ultimo trimestre)', weight: 4 }
+    { text: 'Goldel Cross(ultimo trimestre)', weight: 4 }
   ],
   'Semiconductores': [
     { text: 'Tendencia alcista de largo plazo (precio sobre la EMA de 200)', weight: 3 },
@@ -60,10 +60,6 @@ const SECTOR_CHECKLISTS = {
     { text: 'Volumen y RVOL por encima de la media operativa', weight: 3 }
   ],
   'General': [
-    { text: 'Tendencia alcista de largo plazo (precio sobre la EMA de 200)', weight: 3 },
-    { text: 'Volumen y relativo de volumen (RVOL) por encima de la media operativa', weight: 4 }
-  ],
-  'Comunicacion': [
     { text: 'Tendencia alcista de largo plazo (precio sobre la EMA de 200)', weight: 3 },
     { text: 'Volumen y relativo de volumen (RVOL) por encima de la media operativa', weight: 4 }
   ]
@@ -337,12 +333,6 @@ onMounted(() => {
 </template>
 
 <style scoped>
-
-
-
-
-
-
 .alerts-panel{ display:flex;flex-direction:column;gap:0; }
 .alerts-header{
   display:flex;justify-content:space-between;align-items:center;gap:10px;
@@ -432,11 +422,4 @@ onMounted(() => {
 
 .panel-collapsed-checklist #tv-checklist-body,
 .panel-collapsed-checklist .panel-footer-checklist { display:none !important; }
-
-
-
-
-
-
 </style>
-

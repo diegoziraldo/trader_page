@@ -3,6 +3,7 @@ import * as alerts from '../_lib/alerts.js';
 import * as watchlist from '../_lib/watchlist.js';
 import * as checklist from '../_lib/checklist.js';
 import * as trades from '../_lib/trades.js';
+import * as journal from '../_lib/journal.js';
 
 const app = new Hono().basePath('/api');
 
@@ -125,6 +126,27 @@ app.delete(
   '/trades/:id',
   h(async (c) => {
     await trades.remove(c.env.DB, c.req.param('id'));
+    return c.body(null, 204);
+  })
+);
+
+// ---------- Planilla profesional de trading (journal) ----------
+// OJO: la ruta /summary tiene que declararse antes de /:id, si no Hono
+// interpreta "summary" como un id.
+app.get('/journal/summary', h(async (c) => c.json(await journal.getSummary(c.env.DB))));
+app.get('/journal', h(async (c) => c.json(await journal.getAll(c.env.DB))));
+app.post(
+  '/journal',
+  h(async (c) => c.json(await journal.create(c.env.DB, await c.req.json()), 201))
+);
+app.put(
+  '/journal/:id',
+  h(async (c) => c.json(await journal.update(c.env.DB, c.req.param('id'), await c.req.json())))
+);
+app.delete(
+  '/journal/:id',
+  h(async (c) => {
+    await journal.remove(c.env.DB, c.req.param('id'));
     return c.body(null, 204);
   })
 );

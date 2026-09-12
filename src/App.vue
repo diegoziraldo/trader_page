@@ -8,6 +8,7 @@ import Checklist from './components/Checklist.vue'
 import QuickLinks from './components/QuickLinks.vue'
 import CclCalculator from './components/CclCalculator.vue'
 import TradesModal from './components/TradesModal.vue'
+import JournalModal from './components/JournalModal.vue'
 import { useDolar } from './composables/useDolar'
 import { useUsStocks } from './composables/useStocks'
 
@@ -21,6 +22,9 @@ const { stocks: usStocks, addTicker: addUsTicker, removeTicker: removeUsTicker }
 
 // --- Bitácora de trades (modal) ---
 const showTrades = ref(false)
+
+// --- Planilla profesional de trading (modal) ---
+const showJournal = ref(false)
 </script>
 
 <template>
@@ -32,7 +36,7 @@ const showTrades = ref(false)
     <FinanceTicker :dolares="dolares" :riesgo-pais="riesgoPais" :loading="dolarLoading" compact />
   </div>
   <div>
-    <QuickLinks @open-trades="showTrades = true" />
+    <QuickLinks @open-trades="showTrades = true" @open-journal="showJournal = true" />
     
   </div>
   <!-- Layout principal: las alarmas van al centro, es lo primero que se ve -->
@@ -43,7 +47,6 @@ const showTrades = ref(false)
       placeholder="Ej: AAPL, TSLA"
       @add="addUsTicker"
       @remove="removeUsTicker"
-      @reorder="usStocks = $event"
     />
 
     <!-- Columna central con dos paneles de alertas uno al lado del otro -->
@@ -56,6 +59,7 @@ const showTrades = ref(false)
   </div>
 
   <TradesModal v-if="showTrades" @close="showTrades = false" />
+  <JournalModal v-if="showJournal" @close="showJournal = false" />
 </template>
 
 <style scoped>
@@ -75,7 +79,7 @@ const showTrades = ref(false)
   grid-template-columns: 260px minmax(500px, 1fr) 260px;
   gap:20px;
   width:100%;
-  max-width:85%;
+  max-width:90%;
   margin:0 auto;
   align-items:start;
   padding:10px 16px 10px;

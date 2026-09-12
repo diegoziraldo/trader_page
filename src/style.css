@@ -23,7 +23,7 @@ body{
   font-size:13px;
 }
 
-
+.mono{font-family:var(--font-num);font-variant-numeric:tabular-nums;}
 .up{color:var(--up);}
 .down{color:var(--down);}
 
@@ -34,51 +34,4 @@ a{color:inherit;}
   border:1px solid var(--border);
   border-radius:12px;
   padding:16px;
-}
-
-
-
-:root {
-  --bg: #0b0e14;
-  --panel: #121620;
-  --panel-alt: #181d28;
-  --border: #222836;
-  --text: #f0f4f8;
-  --text-muted: #94a3b8;
-  --accent: #863bff;
-  --up: #00d9a3;
-  --down: #ff4d5e;
-  --font-ui: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-}
-
-* {
-  box-sizing: border-box;
-  margin: 0;
-  padding: 0;
-}
-
-body {
-  background-color: var(--bg);
-  color: var(--text);
-  font-family: var(--font-ui);
-  min-height: 100vh;
-  overflow-x: hidden;
-  -webkit-font-smoothing: antialiased;
-}
-
-/* Contenedor principal adaptable */
-.app-container {
-  display: flex;
-  flex-direction: column;
-  width: 100%;
-  max-width: 1440px;
-  margin: 0 auto;
-  padding: 12px;
-  gap: 16px;
-}
-
-@media (min-width: 1024px) {
-  .app-container {
-    padding: 24px;
-  }
 }
