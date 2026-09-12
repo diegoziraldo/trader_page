@@ -22,7 +22,7 @@ const SECTOR_CHECKLISTS = {
     { text: 'Tendencia alcista de largo plazo (precio sobre la EMA de 200)', weight: 3 },
     { text: 'Volumen y RVOL por encima de la media, con foco en earnings/guidance', weight: 4 },
     { text: 'Crecimiento de ingresos y margenes sostenido (ultimos trimestres)', weight: 4 },
-    { text: 'Goldel Cross(ultimo trimestre)', weight: 4 }
+    { text: 'Golden Cross(ultimo trimestre)', weight: 4 }
   ],
   'Semiconductores': [
     { text: 'Tendencia alcista de largo plazo (precio sobre la EMA de 200)', weight: 3 },
