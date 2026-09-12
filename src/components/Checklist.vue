@@ -337,6 +337,12 @@ onMounted(() => {
 </template>
 
 <style scoped>
+
+
+
+
+
+
 .alerts-panel{ display:flex;flex-direction:column;gap:0; }
 .alerts-header{
   display:flex;justify-content:space-between;align-items:center;gap:10px;
@@ -426,4 +432,11 @@ onMounted(() => {
 
 .panel-collapsed-checklist #tv-checklist-body,
 .panel-collapsed-checklist .panel-footer-checklist { display:none !important; }
+
+
+
+
+
+
 </style>
+

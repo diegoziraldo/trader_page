@@ -43,6 +43,7 @@ const showTrades = ref(false)
       placeholder="Ej: AAPL, TSLA"
       @add="addUsTicker"
       @remove="removeUsTicker"
+      @reorder="usStocks = $event"
     />
 
     <!-- Columna central con dos paneles de alertas uno al lado del otro -->
