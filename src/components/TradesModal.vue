@@ -34,6 +34,7 @@ const errorMsg = ref('')
 const saving = ref(false)
 
 const editingId = ref(null) // null = modo "agregar", si no, id del trade en edición
+const viewMode = ref('form') // 'form' = cargar/editar, 'list' = ver todo el detalle
 
 // --- Dólar CCL en vivo (para "hoy" y para valuar posiciones abiertas) ---
 const cclActual = ref(null)
@@ -249,6 +250,7 @@ function getLivePrice(ticker) {
 // =========================================================
 function startEdit(trade) {
   editingId.value = trade.id
+  viewMode.value = 'form'
   form.date = trade.date
   form.assetType = trade.assetType
   form.ticker = trade.ticker
@@ -401,6 +403,89 @@ onUnmounted(() => {
           </div>
         </div>
 
+        <!-- Selector de pantalla: cargar/editar vs. ver todo el detalle -->
+        <div class="view-tabs">
+          <button
+            type="button"
+            class="view-tab"
+            :class="{ active: viewMode === 'form' }"
+            @click="viewMode = 'form'"
+          >
+            📝 Cargar / Editar
+          </button>
+          <button
+            type="button"
+            class="view-tab"
+            :class="{ active: viewMode === 'list' }"
+            @click="viewMode = 'list'"
+          >
+            📋 Ver todo el detalle ({{ trades.length }})
+          </button>
+        </div>
+
+        <!-- ============================================================ -->
+        <!-- PANTALLA: VER TODO EL DETALLE (solo lectura, una tarjeta por  -->
+        <!-- operación, sin formulario de por medio)                      -->
+        <!-- ============================================================ -->
+        <div v-if="viewMode === 'list'" class="full-detail-screen">
+          <div class="section-title">Todas las operaciones ({{ sortedTrades.length }})</div>
+
+          <div v-if="!sortedTrades.length" class="empty-state">Todavía no cargaste ninguna operación.</div>
+
+          <div v-else class="entry-cards">
+            <div v-for="t in sortedTrades" :key="t.id" class="entry-card">
+              <div class="entry-card-header">
+                <div class="entry-card-title">
+                  <span class="ticker-cell">{{ t.ticker }}</span>
+                  <span class="badge" :class="t.assetType === 'CEDEAR' ? 'badge-cedear' : 'badge-ar'">{{ t.assetType === 'CEDEAR' ? 'CEDEAR' : 'Acción AR' }}</span>
+                  <span class="badge" :class="t.operation === 'COMPRA' ? 'badge-buy' : 'badge-sell'">{{ t.operation === 'COMPRA' ? 'Compra' : 'Venta' }}</span>
+                </div>
+                <div class="entry-card-actions">
+                  <button class="icon-btn" title="Editar" @click="startEdit(t)">✎</button>
+                  <button class="icon-btn icon-btn-danger" title="Eliminar" @click="removeTrade(t)">🗑</button>
+                </div>
+              </div>
+
+              <div class="entry-card-dates">{{ formatDate(t.date) }}</div>
+
+              <div class="entry-card-grid">
+                <div class="detail-item">
+                  <span class="detail-label">Cantidad</span>
+                  <span class="detail-value">{{ formatNum(t.quantity) }}</span>
+                </div>
+                <div class="detail-item">
+                  <span class="detail-label">Precio (ARS)</span>
+                  <span class="detail-value">${{ formatMoney(t.price) }}</span>
+                </div>
+                <div class="detail-item">
+                  <span class="detail-label">CCL del día</span>
+                  <span class="detail-value">{{ t.ccl ? `$${formatMoney(t.ccl)}` : '—' }}</span>
+                </div>
+                <div class="detail-item">
+                  <span class="detail-label">Precio (USD)</span>
+                  <span class="detail-value">{{ t.priceUSD != null ? `US$${formatMoney(t.priceUSD)}` : '—' }}</span>
+                </div>
+                <div class="detail-item">
+                  <span class="detail-label">Comisión</span>
+                  <span class="detail-value">${{ formatMoney(t.fee) }}</span>
+                </div>
+                <div class="detail-item">
+                  <span class="detail-label">Total operación</span>
+                  <span class="detail-value">${{ formatMoney(t.total) }}</span>
+                </div>
+              </div>
+
+              <div class="entry-card-notes">
+                <div class="detail-item">
+                  <span class="detail-label">Notas</span>
+                  <p class="detail-text">{{ t.notes || 'Sin notas cargadas.' }}</p>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <template v-if="viewMode === 'form'">
         <!-- Posiciones abiertas: valor de mercado y rendimiento no realizado -->
         <div v-if="openPositions.length" class="by-symbol-section">
           <div class="section-title">Posiciones abiertas — valor de mercado</div>
@@ -597,6 +682,7 @@ onUnmounted(() => {
           </table>
           <div v-else class="empty-state">Todavía no cargaste ninguna operación.</div>
         </div>
+        </template>
       </template>
     </div>
   </div>
@@ -714,6 +800,133 @@ onUnmounted(() => {
   text-transform: uppercase;
   letter-spacing: 0.5px;
   color: var(--text-dim);
+}
+
+.view-tabs {
+  display: flex;
+  gap: 8px;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 12px;
+}
+
+.view-tab {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  border-radius: 8px;
+  padding: 8px 14px;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.view-tab:hover {
+  color: var(--text);
+  border-color: var(--text-dim);
+}
+
+.view-tab.active {
+  background: rgba(37, 99, 235, 0.15);
+  border-color: #2563eb;
+  color: var(--blue);
+}
+
+.full-detail-screen {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.entry-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.entry-card {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.entry-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.entry-card-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.entry-card-title .ticker-cell {
+  font-size: 15px;
+}
+
+.entry-card-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.entry-card-dates {
+  font-size: 11px;
+  color: var(--text-dim);
+  font-family: var(--font-num, inherit);
+}
+
+.entry-card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+  gap: 10px;
+  padding: 10px 0;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+
+.entry-card-notes {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+}
+
+.detail-item {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.detail-label {
+  font-size: 10px;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  font-weight: 700;
+}
+
+.detail-value {
+  font-size: 12px;
+  color: var(--text);
+  font-family: var(--font-num, inherit);
+}
+
+.detail-text {
+  font-size: 12px;
+  color: var(--text);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: inherit;
+  margin: 0;
 }
 
 .by-symbol-table-wrap,

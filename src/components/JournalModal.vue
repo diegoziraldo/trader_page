@@ -52,7 +52,8 @@ const saving = ref(false)
 const statusFilter = ref('TODAS')
 
 const editingId = ref(null)
-const expandedId = ref(null) // id de la operación con el detalle desplegado
+const expandedId = ref(null) // id de la operación con el detalle desplegado (vista tabla)
+const viewMode = ref('form') // 'form' = cargar/editar, 'list' = ver todo el detalle
 
 function toggleExpand(id) {
   expandedId.value = expandedId.value === id ? null : id
@@ -172,6 +173,7 @@ async function refreshSummary() {
 
 function startEdit(entry) {
   editingId.value = entry.id
+  viewMode.value = 'form'
   form.entryDate = entry.entryDate
   form.exitDate = entry.exitDate || ''
   form.market = entry.market
@@ -339,6 +341,169 @@ onMounted(() => {
           </div>
         </div>
 
+        <!-- Selector de pantalla: cargar/editar vs. ver todo el detalle -->
+        <div class="view-tabs">
+          <button
+            type="button"
+            class="view-tab"
+            :class="{ active: viewMode === 'form' }"
+            @click="viewMode = 'form'"
+          >
+            📝 Cargar / Editar
+          </button>
+          <button
+            type="button"
+            class="view-tab"
+            :class="{ active: viewMode === 'list' }"
+            @click="viewMode = 'list'"
+          >
+            📋 Ver todo el detalle ({{ entries.length }})
+          </button>
+        </div>
+
+        <!-- ============================================================ -->
+        <!-- PANTALLA: VER TODO EL DETALLE (solo lectura, una tarjeta por  -->
+        <!-- operación, con TODOS los campos, sin formulario de por medio) -->
+        <!-- ============================================================ -->
+        <div v-if="viewMode === 'list'" class="full-detail-screen">
+          <div class="table-header-row">
+            <div class="section-title">Todas las operaciones ({{ filteredEntries.length }})</div>
+            <div class="status-filters">
+              <button
+                v-for="f in ['TODAS', 'ABIERTO', 'CERRADO', 'CANCELADO']"
+                :key="f"
+                type="button"
+                class="filter-btn"
+                :class="{ active: statusFilter === f }"
+                @click="statusFilter = f"
+              >
+                {{ f === 'TODAS' ? 'Todas' : STATUS_LABELS[f] }}
+              </button>
+            </div>
+          </div>
+
+          <div v-if="!sortedEntries.length" class="empty-state">
+            Todavía no cargaste ninguna operación en la planilla.
+          </div>
+
+          <div v-else class="entry-cards">
+            <div v-for="e in sortedEntries" :key="e.id" class="entry-card">
+              <div class="entry-card-header">
+                <div class="entry-card-title">
+                  <span class="ticker-cell">{{ e.symbol }}</span>
+                  <span class="badge" :class="MARKET_BADGE_CLASS[e.market]">{{ MARKET_LABELS[e.market] }}</span>
+                  <span class="badge" :class="e.direction === 'LONG' ? 'badge-buy' : 'badge-sell'">{{ e.direction === 'LONG' ? 'Long' : 'Short' }}</span>
+                  <span class="badge" :class="{
+                    'badge-open': e.status === 'ABIERTO',
+                    'badge-closed': e.status === 'CERRADO',
+                    'badge-cancel': e.status === 'CANCELADO',
+                  }">{{ STATUS_LABELS[e.status] }}</span>
+                </div>
+                <div class="entry-card-actions">
+                  <button class="icon-btn" title="Editar" @click="startEdit(e)">✎</button>
+                  <button class="icon-btn icon-btn-danger" title="Eliminar" @click="removeEntry(e)">🗑</button>
+                </div>
+              </div>
+
+              <div class="entry-card-dates">
+                {{ formatDate(e.entryDate) }} → {{ e.exitDate ? formatDate(e.exitDate) : 'en curso' }}
+                <span class="pct-tag">({{ formatDays(e) }})</span>
+              </div>
+
+              <div class="entry-card-grid">
+                <div class="detail-item">
+                  <span class="detail-label">Precio entrada</span>
+                  <span class="detail-value">{{ formatNum(e.entryPrice) }}</span>
+                </div>
+                <div class="detail-item">
+                  <span class="detail-label">Stop loss</span>
+                  <span class="detail-value">{{ formatNum(e.stopLoss) }}</span>
+                </div>
+                <div class="detail-item">
+                  <span class="detail-label">Take profit</span>
+                  <span class="detail-value">{{ formatNum(e.takeProfit) }}</span>
+                </div>
+                <div class="detail-item">
+                  <span class="detail-label">Precio salida</span>
+                  <span class="detail-value">{{ formatNum(e.exitPrice) }}</span>
+                </div>
+                <div class="detail-item">
+                  <span class="detail-label">Tamaño</span>
+                  <span class="detail-value">{{ formatNum(e.size) }}</span>
+                </div>
+                <div class="detail-item">
+                  <span class="detail-label">Apalancamiento</span>
+                  <span class="detail-value">{{ formatNum(e.leverage) }}x</span>
+                </div>
+                <div class="detail-item">
+                  <span class="detail-label">Comisión / Swap</span>
+                  <span class="detail-value">${{ formatMoney(e.fee) }}</span>
+                </div>
+                <div class="detail-item">
+                  <span class="detail-label">Riesgo</span>
+                  <span class="detail-value">
+                    {{ e.riskAmount != null ? `$${formatMoney(e.riskAmount)}` : '—' }}
+                    <template v-if="e.riskPercent != null"> · {{ e.riskPercent }}%</template>
+                  </span>
+                </div>
+                <div class="detail-item">
+                  <span class="detail-label">R:R planeado</span>
+                  <span class="detail-value">{{ e.plannedRR === null ? '—' : `${e.plannedRR}R` }}</span>
+                </div>
+                <div class="detail-item">
+                  <span class="detail-label">Resultado</span>
+                  <span class="detail-value" :class="e.resultAmount === null ? '' : (e.resultAmount >= 0 ? 'pl-pos' : 'pl-neg')">
+                    {{ e.resultAmount === null ? '—' : `${e.resultAmount >= 0 ? '+' : ''}$${formatMoney(e.resultAmount)}` }}
+                  </span>
+                </div>
+                <div class="detail-item">
+                  <span class="detail-label">Resultado en R</span>
+                  <span class="detail-value" :class="e.resultR === null ? '' : (e.resultR >= 0 ? 'pl-pos' : 'pl-neg')">
+                    {{ e.resultR === null ? '—' : `${e.resultR >= 0 ? '+' : ''}${e.resultR}R` }}
+                  </span>
+                </div>
+                <div class="detail-item">
+                  <span class="detail-label">Estrategia / Setup</span>
+                  <span class="detail-value">{{ e.strategy || '—' }}</span>
+                </div>
+                <div class="detail-item">
+                  <span class="detail-label">Timeframe</span>
+                  <span class="detail-value">{{ e.timeframe || '—' }}</span>
+                </div>
+                <div class="detail-item">
+                  <span class="detail-label">Cuenta / Broker</span>
+                  <span class="detail-value">{{ e.account || '—' }}</span>
+                </div>
+                <div class="detail-item">
+                  <span class="detail-label">Emoción al entrar</span>
+                  <span class="detail-value">{{ e.emotion || 'Sin especificar' }}</span>
+                </div>
+                <div class="detail-item">
+                  <span class="detail-label">¿Siguió el plan?</span>
+                  <span class="detail-value" :class="e.followedPlan ? 'pl-pos' : 'pl-neg'">
+                    {{ e.followedPlan ? 'Sí' : 'No' }}
+                  </span>
+                </div>
+              </div>
+
+              <div class="entry-card-notes">
+                <div class="detail-item">
+                  <span class="detail-label">Razón de entrada / tesis</span>
+                  <p class="detail-text">{{ e.entryReason || 'Sin notas cargadas.' }}</p>
+                </div>
+                <div class="detail-item">
+                  <span class="detail-label">Lecciones / revisión</span>
+                  <p class="detail-text">{{ e.lessons || 'Sin notas cargadas.' }}</p>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ============================================================ -->
+        <!-- PANTALLA: CARGAR / EDITAR (formulario + tabla compacta)       -->
+        <!-- ============================================================ -->
+        <template v-if="viewMode === 'form'">
         <!-- Formulario alta / edición -->
         <form class="journal-form" @submit.prevent="submitForm">
           <div class="section-title">{{ editingId ? 'Editar operación' : 'Nueva operación' }}</div>
@@ -617,6 +782,7 @@ onMounted(() => {
           </table>
           <div v-else class="empty-state">Todavía no cargaste ninguna operación en la planilla.</div>
         </div>
+        </template>
       </template>
     </div>
   </div>
@@ -734,6 +900,102 @@ onMounted(() => {
   text-transform: uppercase;
   letter-spacing: 0.5px;
   color: var(--text-dim);
+}
+
+.view-tabs {
+  display: flex;
+  gap: 8px;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 12px;
+}
+
+.view-tab {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  border-radius: 8px;
+  padding: 8px 14px;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.view-tab:hover {
+  color: var(--text);
+  border-color: var(--text-dim);
+}
+
+.view-tab.active {
+  background: rgba(37, 99, 235, 0.15);
+  border-color: #2563eb;
+  color: var(--blue);
+}
+
+.full-detail-screen {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.entry-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.entry-card {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.entry-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.entry-card-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.entry-card-title .ticker-cell {
+  font-size: 15px;
+}
+
+.entry-card-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.entry-card-dates {
+  font-size: 11px;
+  color: var(--text-dim);
+  font-family: var(--font-num, inherit);
+}
+
+.entry-card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+  gap: 10px;
+  padding: 10px 0;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+
+.entry-card-notes {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
 }
 
 .form-subsection-title {
