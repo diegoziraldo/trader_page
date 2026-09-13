@@ -23,7 +23,7 @@ body{
   font-size:13px;
 }
 
-.mono{font-family:var(--font-num);font-variant-numeric:tabular-nums;}
+
 .up{color:var(--up);}
 .down{color:var(--down);}
 
