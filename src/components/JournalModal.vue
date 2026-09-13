@@ -52,6 +52,11 @@ const saving = ref(false)
 const statusFilter = ref('TODAS')
 
 const editingId = ref(null)
+const expandedId = ref(null) // id de la operación con el detalle desplegado
+
+function toggleExpand(id) {
+  expandedId.value = expandedId.value === id ? null : id
+}
 
 function todayISO() {
   return new Date().toISOString().slice(0, 10)
@@ -487,6 +492,7 @@ onMounted(() => {
           <table class="journal-table" v-if="sortedEntries.length">
             <thead>
               <tr>
+                <th></th>
                 <th>Fecha</th>
                 <th>Mercado</th>
                 <th>Símbolo</th>
@@ -506,37 +512,107 @@ onMounted(() => {
               </tr>
             </thead>
             <tbody>
-              <tr v-for="e in sortedEntries" :key="e.id" :class="{ 'row-editing': editingId === e.id }">
-                <td>{{ formatDate(e.entryDate) }}</td>
-                <td><span class="badge" :class="MARKET_BADGE_CLASS[e.market]">{{ MARKET_LABELS[e.market] }}</span></td>
-                <td class="ticker-cell" :title="e.strategy">{{ e.symbol }}</td>
-                <td><span class="badge" :class="e.direction === 'LONG' ? 'badge-buy' : 'badge-sell'">{{ e.direction === 'LONG' ? 'Long' : 'Short' }}</span></td>
-                <td>{{ formatNum(e.entryPrice) }}</td>
-                <td>{{ formatNum(e.stopLoss) }}</td>
-                <td>{{ formatNum(e.takeProfit) }}</td>
-                <td>{{ formatNum(e.exitPrice) }}</td>
-                <td>{{ formatDays(e) }}</td>
-                <td>{{ formatNum(e.size) }}</td>
-                <td>{{ e.plannedRR === null ? '—' : `${e.plannedRR}R` }}</td>
-                <td v-if="e.resultAmount === null">—</td>
-                <td v-else :class="e.resultAmount >= 0 ? 'pl-pos' : 'pl-neg'">
-                  {{ e.resultAmount >= 0 ? '+' : '' }}${{ formatMoney(e.resultAmount) }}
-                </td>
-                <td v-if="e.resultR === null">—</td>
-                <td v-else :class="e.resultR >= 0 ? 'pl-pos' : 'pl-neg'">{{ e.resultR >= 0 ? '+' : '' }}{{ e.resultR }}R</td>
-                <td>
-                  <span class="badge" :class="{
-                    'badge-open': e.status === 'ABIERTO',
-                    'badge-closed': e.status === 'CERRADO',
-                    'badge-cancel': e.status === 'CANCELADO',
-                  }">{{ STATUS_LABELS[e.status] }}</span>
-                </td>
-                <td class="plan-cell">{{ e.followedPlan ? '✓' : '✕' }}</td>
-                <td class="actions-cell">
-                  <button class="icon-btn" title="Editar" @click="startEdit(e)">✎</button>
-                  <button class="icon-btn icon-btn-danger" title="Eliminar" @click="removeEntry(e)">🗑</button>
-                </td>
-              </tr>
+              <template v-for="e in sortedEntries" :key="e.id">
+                <tr
+                  class="entry-row"
+                  :class="{ 'row-editing': editingId === e.id, 'row-expanded': expandedId === e.id }"
+                  @click="toggleExpand(e.id)"
+                >
+                  <td class="expand-cell">{{ expandedId === e.id ? '▾' : '▸' }}</td>
+                  <td>{{ formatDate(e.entryDate) }}</td>
+                  <td><span class="badge" :class="MARKET_BADGE_CLASS[e.market]">{{ MARKET_LABELS[e.market] }}</span></td>
+                  <td class="ticker-cell" :title="e.strategy">{{ e.symbol }}</td>
+                  <td><span class="badge" :class="e.direction === 'LONG' ? 'badge-buy' : 'badge-sell'">{{ e.direction === 'LONG' ? 'Long' : 'Short' }}</span></td>
+                  <td>{{ formatNum(e.entryPrice) }}</td>
+                  <td>{{ formatNum(e.stopLoss) }}</td>
+                  <td>{{ formatNum(e.takeProfit) }}</td>
+                  <td>{{ formatNum(e.exitPrice) }}</td>
+                  <td>{{ formatDays(e) }}</td>
+                  <td>{{ formatNum(e.size) }}</td>
+                  <td>{{ e.plannedRR === null ? '—' : `${e.plannedRR}R` }}</td>
+                  <td v-if="e.resultAmount === null">—</td>
+                  <td v-else :class="e.resultAmount >= 0 ? 'pl-pos' : 'pl-neg'">
+                    {{ e.resultAmount >= 0 ? '+' : '' }}${{ formatMoney(e.resultAmount) }}
+                  </td>
+                  <td v-if="e.resultR === null">—</td>
+                  <td v-else :class="e.resultR >= 0 ? 'pl-pos' : 'pl-neg'">{{ e.resultR >= 0 ? '+' : '' }}{{ e.resultR }}R</td>
+                  <td>
+                    <span class="badge" :class="{
+                      'badge-open': e.status === 'ABIERTO',
+                      'badge-closed': e.status === 'CERRADO',
+                      'badge-cancel': e.status === 'CANCELADO',
+                    }">{{ STATUS_LABELS[e.status] }}</span>
+                  </td>
+                  <td class="plan-cell">{{ e.followedPlan ? '✓' : '✕' }}</td>
+                  <td class="actions-cell">
+                    <button class="icon-btn" title="Editar" @click.stop="startEdit(e)">✎</button>
+                    <button class="icon-btn icon-btn-danger" title="Eliminar" @click.stop="removeEntry(e)">🗑</button>
+                  </td>
+                </tr>
+                <tr v-if="expandedId === e.id" class="detail-row">
+                  <td :colspan="17">
+                    <div class="detail-panel">
+                      <div class="detail-col">
+                        <div class="detail-item">
+                          <span class="detail-label">Estrategia / Setup</span>
+                          <span class="detail-value">{{ e.strategy || '—' }}</span>
+                        </div>
+                        <div class="detail-item">
+                          <span class="detail-label">Timeframe</span>
+                          <span class="detail-value">{{ e.timeframe || '—' }}</span>
+                        </div>
+                        <div class="detail-item">
+                          <span class="detail-label">Cuenta / Broker</span>
+                          <span class="detail-value">{{ e.account || '—' }}</span>
+                        </div>
+                      </div>
+                      <div class="detail-col">
+                        <div class="detail-item">
+                          <span class="detail-label">Apalancamiento</span>
+                          <span class="detail-value">{{ formatNum(e.leverage) }}x</span>
+                        </div>
+                        <div class="detail-item">
+                          <span class="detail-label">Comisión / Swap</span>
+                          <span class="detail-value">${{ formatMoney(e.fee) }}</span>
+                        </div>
+                        <div class="detail-item">
+                          <span class="detail-label">Riesgo</span>
+                          <span class="detail-value">
+                            {{ e.riskAmount != null ? `$${formatMoney(e.riskAmount)}` : '—' }}
+                            <template v-if="e.riskPercent != null"> · {{ e.riskPercent }}%</template>
+                          </span>
+                        </div>
+                      </div>
+                      <div class="detail-col">
+                        <div class="detail-item">
+                          <span class="detail-label">Emoción al entrar</span>
+                          <span class="detail-value">{{ e.emotion || 'Sin especificar' }}</span>
+                        </div>
+                        <div class="detail-item">
+                          <span class="detail-label">¿Siguió el plan?</span>
+                          <span class="detail-value" :class="e.followedPlan ? 'pl-pos' : 'pl-neg'">
+                            {{ e.followedPlan ? 'Sí' : 'No' }}
+                          </span>
+                        </div>
+                        <div class="detail-item">
+                          <span class="detail-label">Cargada</span>
+                          <span class="detail-value">{{ formatDate(e.entryDate) }} → {{ e.exitDate ? formatDate(e.exitDate) : 'en curso' }}</span>
+                        </div>
+                      </div>
+                      <div class="detail-col detail-col-wide">
+                        <div class="detail-item">
+                          <span class="detail-label">Razón de entrada / tesis</span>
+                          <p class="detail-text">{{ e.entryReason || 'Sin notas cargadas.' }}</p>
+                        </div>
+                        <div class="detail-item">
+                          <span class="detail-label">Lecciones / revisión</span>
+                          <p class="detail-text">{{ e.lessons || 'Sin notas cargadas.' }}</p>
+                        </div>
+                      </div>
+                    </div>
+                  </td>
+                </tr>
+              </template>
             </tbody>
           </table>
           <div v-else class="empty-state">Todavía no cargaste ninguna operación en la planilla.</div>
@@ -747,6 +823,97 @@ onMounted(() => {
 
 .row-editing {
   background: rgba(37, 99, 235, 0.08);
+}
+
+.entry-row {
+  cursor: pointer;
+}
+
+.entry-row:hover {
+  background: var(--bg);
+}
+
+.row-expanded {
+  background: rgba(37, 99, 235, 0.05);
+}
+
+.expand-cell {
+  text-align: center;
+  color: var(--text-dim);
+  width: 20px;
+}
+
+.detail-row td {
+  padding: 0;
+  background: var(--bg);
+  cursor: default;
+  white-space: normal;
+}
+
+.detail-panel {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(160px, 1fr)) minmax(240px, 1.6fr);
+  gap: 14px;
+  padding: 14px 16px;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+
+.detail-col {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+
+.detail-col-wide {
+  grid-column: span 1;
+}
+
+.detail-item {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.detail-label {
+  font-size: 10px;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  font-weight: 700;
+}
+
+.detail-value {
+  font-size: 12px;
+  color: var(--text);
+  font-family: var(--font-num, inherit);
+}
+
+.detail-text {
+  font-size: 12px;
+  color: var(--text);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: inherit;
+  margin: 0;
+}
+
+@media (max-width: 900px) {
+  .detail-panel {
+    grid-template-columns: 1fr 1fr;
+  }
+  .detail-col-wide {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 600px) {
+  .detail-panel {
+    grid-template-columns: 1fr;
+  }
 }
 
 .ticker-cell {
