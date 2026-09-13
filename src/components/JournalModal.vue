@@ -104,6 +104,25 @@ function formatDate(d) {
   return `${day}/${m}/${y}`
 }
 
+// Días transcurridos de la operación: desde la entrada hasta la salida (si
+// ya cerró) o hasta hoy (si sigue abierta/en curso).
+function daysElapsed(entry) {
+  if (!entry.entryDate) return null
+  const start = new Date(`${entry.entryDate}T00:00:00`)
+  const endStr = entry.status === 'CERRADO' && entry.exitDate ? entry.exitDate : todayISO()
+  const end = new Date(`${endStr}T00:00:00`)
+  const diffDays = Math.round((end - start) / (1000 * 60 * 60 * 24))
+  return diffDays < 0 ? 0 : diffDays
+}
+
+function formatDays(entry) {
+  const days = daysElapsed(entry)
+  if (days === null) return '—'
+  const label = days === 1 ? 'día' : 'días'
+  const enCurso = entry.status === 'ABIERTO' && !entry.exitDate
+  return `${days} ${label}${enCurso ? ' (en curso)' : ''}`
+}
+
 const filteredEntries = computed(() => {
   if (statusFilter.value === 'TODAS') return entries.value
   return entries.value.filter((e) => e.status === statusFilter.value)
@@ -114,6 +133,15 @@ const sortedEntries = computed(() =>
     a.entryDate < b.entryDate ? 1 : a.entryDate > b.entryDate ? -1 : b.id - a.id
   )
 )
+
+// Duración promedio de las operaciones ya cerradas (en días), para el
+// resumen general.
+const avgDurationDays = computed(() => {
+  const closed = entries.value.filter((e) => e.status === 'CERRADO' && e.exitDate)
+  if (!closed.length) return null
+  const total = closed.reduce((acc, e) => acc + (daysElapsed(e) ?? 0), 0)
+  return Math.round((total / closed.length) * 10) / 10
+})
 
 async function loadAll() {
   loading.value = true
@@ -300,6 +328,10 @@ onMounted(() => {
             <span class="summary-label">Adherencia al plan</span>
             <strong>{{ formatNum(summary.totals.planAdherence) }}%</strong>
           </div>
+          <div class="summary-card">
+            <span class="summary-label">Duración promedio</span>
+            <strong>{{ avgDurationDays === null ? '—' : `${avgDurationDays} días` }}</strong>
+          </div>
         </div>
 
         <!-- Formulario alta / edición -->
@@ -463,6 +495,7 @@ onMounted(() => {
                 <th>SL</th>
                 <th>TP</th>
                 <th>Salida</th>
+                <th>Días</th>
                 <th>Tamaño</th>
                 <th>R:R plan.</th>
                 <th>Resultado</th>
@@ -482,6 +515,7 @@ onMounted(() => {
                 <td>{{ formatNum(e.stopLoss) }}</td>
                 <td>{{ formatNum(e.takeProfit) }}</td>
                 <td>{{ formatNum(e.exitPrice) }}</td>
+                <td>{{ formatDays(e) }}</td>
                 <td>{{ formatNum(e.size) }}</td>
                 <td>{{ e.plannedRR === null ? '—' : `${e.plannedRR}R` }}</td>
                 <td v-if="e.resultAmount === null">—</td>
