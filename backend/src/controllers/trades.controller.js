@@ -1,198 +1,215 @@
-const db = require('../db'); // Ajustá esta ruta según tu conexión a better-sqlite3
+const db = require('../db');
 
-function enrichTrade(row) {
-  const priceUSD = row.ccl && row.ccl > 0 ? row.price / row.ccl : null;
-  const total = (row.quantity * row.price) + (row.fee || 0);
+function formatTrade(row) {
   return {
-    ...row,
-    priceUSD,
-    total,
+    id: row.id,
+    date: row.trade_date,
+    assetType: row.asset_type,
+    ticker: row.ticker,
+    operation: row.operation,
+    quantity: row.quantity,
+    price: row.price,
+    fee: row.fee,
+    notes: row.notes,
+    ccl: row.ccl,
+    // Precio de esta operación puntual, convertido a USD con el CCL que
+    // estaba vigente ese día (si se cargó).
+    priceUSD: row.ccl ? Math.round((row.price / row.ccl) * 10000) / 10000 : null,
+    total: row.operation === 'COMPRA'
+      ? row.quantity * row.price + row.fee
+      : row.quantity * row.price - row.fee,
+    createdAt: row.created_at,
   };
 }
 
-exports.getAllTrades = (req, res) => {
-  try {
-    const rows = db.prepare('SELECT * FROM trades ORDER BY date DESC, id DESC').all();
-    const enriched = rows.map(enrichTrade);
-    return res.status(200).json(enriched);
-  } catch (error) {
-    console.error('getAllTrades error:', error);
-    return res.status(500).json({ error: 'Error al obtener los trades' });
-  }
-};
+// GET /api/trades
+function getAll(req, res) {
+  const rows = db
+    .prepare('SELECT * FROM trades ORDER BY trade_date ASC, id ASC')
+    .all();
+  res.json(rows.map(formatTrade));
+}
 
-exports.getTradesSummary = (req, res) => {
-  try {
-    const rows = db.prepare('SELECT * FROM trades ORDER BY date ASC, id ASC').all();
-    const trades = rows.map(enrichTrade);
+function validateBody(body) {
+  const errors = [];
+  if (!body.date) errors.push('date es requerido');
+  if (!['CEDEAR', 'ACCION_AR'].includes(body.assetType)) errors.push('assetType inválido');
+  if (!body.ticker || !String(body.ticker).trim()) errors.push('ticker es requerido');
+  if (!['COMPRA', 'VENTA'].includes(body.operation)) errors.push('operation inválido');
+  if (!(Number(body.quantity) > 0)) errors.push('quantity debe ser mayor a 0');
+  if (!(Number(body.price) > 0)) errors.push('price debe ser mayor a 0');
+  return errors;
+}
 
-    const positions = {};
-    let realizedPL = 0;
-    let realizedPLUSD = 0;
+// POST /api/trades
+// { date, assetType, ticker, operation, quantity, price, fee?, notes?, ccl? }
+function create(req, res) {
+  const errors = validateBody(req.body);
+  if (errors.length) return res.status(400).json({ error: errors.join(', ') });
 
-    for (const t of trades) {
-      const key = t.ticker;
-      if (!positions[key]) {
-        positions[key] = {
-          ticker: t.ticker,
-          assetType: t.assetType,
-          quantity: 0,
-          totalCostARS: 0,
-          totalCostUSD: 0,
-          usdIncomplete: false,
-        };
-      }
+  const { date, assetType, operation, notes = '' } = req.body;
+  const ticker = req.body.ticker.trim().toUpperCase();
+  const quantity = Number(req.body.quantity);
+  const price = Number(req.body.price);
+  const fee = Number(req.body.fee) || 0;
+  const ccl = req.body.ccl != null && req.body.ccl !== '' ? Number(req.body.ccl) : null;
 
-      const pos = positions[key];
-      pos.assetType = t.assetType;
+  const info = db
+    .prepare(
+      `INSERT INTO trades (trade_date, asset_type, ticker, operation, quantity, price, fee, notes, ccl)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    )
+    .run(date, assetType, ticker, operation, quantity, price, fee, notes, ccl);
 
-      if (t.ccl === null || t.ccl === undefined || t.ccl === 0) {
-        pos.usdIncomplete = true;
-      }
+  const created = db.prepare('SELECT * FROM trades WHERE id = ?').get(info.lastInsertRowid);
+  res.status(201).json(formatTrade(created));
+}
 
-      if (t.operation === 'COMPRA') {
-        const costARS = t.quantity * t.price + (t.fee || 0);
-        const costUSD = t.priceUSD ? t.quantity * t.priceUSD : 0;
-        pos.quantity += t.quantity;
-        pos.totalCostARS += costARS;
-        pos.totalCostUSD += costUSD;
-      } else if (t.operation === 'VENTA') {
-        const avgCostARS = pos.quantity > 0 ? pos.totalCostARS / pos.quantity : 0;
-        const avgCostUSD = pos.quantity > 0 ? pos.totalCostUSD / pos.quantity : 0;
-        const saleProceedsARS = t.quantity * t.price - (t.fee || 0);
-        const saleProceedsUSD = t.priceUSD ? t.quantity * t.priceUSD : 0;
+// PUT /api/trades/:id
+function update(req, res) {
+  const existing = db.prepare('SELECT * FROM trades WHERE id = ?').get(req.params.id);
+  if (!existing) return res.status(404).json({ error: 'Trade no encontrado' });
 
-        const costSoldARS = t.quantity * avgCostARS;
-        const costSoldUSD = t.quantity * avgCostUSD;
+  const merged = {
+    date: req.body.date ?? existing.trade_date,
+    assetType: req.body.assetType ?? existing.asset_type,
+    ticker: req.body.ticker ?? existing.ticker,
+    operation: req.body.operation ?? existing.operation,
+    quantity: req.body.quantity ?? existing.quantity,
+    price: req.body.price ?? existing.price,
+  };
+  const errors = validateBody(merged);
+  if (errors.length) return res.status(400).json({ error: errors.join(', ') });
 
-        const tradePLARS = saleProceedsARS - costSoldARS;
-        const tradePLUSD = t.priceUSD ? saleProceedsUSD - costSoldUSD : 0;
+  const fee = req.body.fee !== undefined ? Number(req.body.fee) : existing.fee;
+  const notes = req.body.notes !== undefined ? req.body.notes : existing.notes;
+  const ccl = req.body.ccl !== undefined
+    ? (req.body.ccl === '' || req.body.ccl === null ? null : Number(req.body.ccl))
+    : existing.ccl;
 
-        realizedPL += tradePLARS;
-        realizedPLUSD += tradePLUSD;
+  db.prepare(
+    `UPDATE trades SET
+      trade_date = ?, asset_type = ?, ticker = ?, operation = ?,
+      quantity = ?, price = ?, fee = ?, notes = ?, ccl = ?, updated_at = datetime('now')
+     WHERE id = ?`
+  ).run(
+    merged.date,
+    merged.assetType,
+    String(merged.ticker).trim().toUpperCase(),
+    merged.operation,
+    Number(merged.quantity),
+    Number(merged.price),
+    fee,
+    notes,
+    ccl,
+    req.params.id
+  );
 
-        pos.quantity = Math.max(0, pos.quantity - t.quantity);
-        pos.totalCostARS = Math.max(0, pos.totalCostARS - costSoldARS);
-        pos.totalCostUSD = Math.max(0, pos.totalCostUSD - costSoldUSD);
-      }
-    }
+  const updated = db.prepare('SELECT * FROM trades WHERE id = ?').get(req.params.id);
+  res.json(formatTrade(updated));
+}
 
-    const bySymbol = Object.values(positions).map((pos) => {
-      const avgCost = pos.quantity > 0 ? pos.totalCostARS / pos.quantity : 0;
-      const avgCostUSD = pos.quantity > 0 ? pos.totalCostUSD / pos.quantity : 0;
-      return {
-        ticker: pos.ticker,
-        assetType: pos.assetType,
-        quantity: pos.quantity,
-        avgCost,
-        avgCostUSD,
-        usdIncomplete: pos.usdIncomplete,
-        invested: pos.totalCostARS,
-        investedUSD: pos.totalCostUSD,
+// DELETE /api/trades/:id
+function remove(req, res) {
+  const result = db.prepare('DELETE FROM trades WHERE id = ?').run(req.params.id);
+  if (result.changes === 0) return res.status(404).json({ error: 'Trade no encontrado' });
+  res.status(204).send();
+}
+
+// =========================================================
+// RESUMEN: ganancias/pérdidas realizadas por costo promedio (PPC),
+// calculado en paralelo en PESOS y en DÓLARES (vía el CCL de cada operación)
+// =========================================================
+// Por cada ticker, mantenemos cantidad en cartera y costo promedio (en ARS
+// y en USD). En cada VENTA, la ganancia/pérdida realizada es:
+//   cantidad_vendida * (precio_venta - costo_promedio) - comisión
+// La pata en USD es el mismo cálculo pero usando precio/comisión ya
+// convertidos a USD con el CCL de esa operación puntual. Si a alguna
+// operación de un ticker le falta el CCL, marcamos ese ticker como
+// "usdIncomplete" para no mostrar un número en USD que estaría mal.
+function computeSummary(trades) {
+  const bySymbol = {};
+
+  for (const t of trades) {
+    if (!bySymbol[t.ticker]) {
+      bySymbol[t.ticker] = {
+        ticker: t.ticker,
+        assetType: t.assetType,
+        quantity: 0,
+        avgCost: 0,
+        invested: 0,
         realizedPL: 0,
+        avgCostUSD: 0,
+        investedUSD: 0,
         realizedPLUSD: 0,
+        usdIncomplete: false,
       };
-    });
-
-    const openPositionsCount = bySymbol.filter((s) => s.quantity > 0).length;
-    const totalInvested = bySymbol.reduce((acc, s) => acc + s.invested, 0);
-    const totalInvestedUSD = bySymbol.reduce((acc, s) => acc + s.investedUSD, 0);
-
-    return res.status(200).json({
-      bySymbol,
-      totals: {
-        realizedPL,
-        realizedPLUSD,
-        invested: totalInvested,
-        investedUSD: totalInvestedUSD,
-        openPositions: openPositionsCount,
-        totalTrades: trades.length,
-      },
-    });
-  } catch (error) {
-    console.error('getTradesSummary error:', error);
-    return res.status(500).json({ error: 'Error al calcular el resumen' });
-  }
-};
-
-exports.createTrade = (req, res) => {
-  try {
-    const { date, assetType, ticker, operation, quantity, price, fee, ccl, notes } = req.body;
-
-    const stmt = db.prepare(`
-      INSERT INTO trades (date, assetType, ticker, operation, quantity, price, fee, ccl, notes)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `);
-
-    const info = stmt.run(
-      date,
-      assetType,
-      ticker.trim().toUpperCase(),
-      operation,
-      Number(quantity),
-      Number(price),
-      Number(fee || 0),
-      ccl !== null && ccl !== undefined && ccl !== '' ? Number(ccl) : null,
-      notes ? notes.trim() : ''
-    );
-
-    const created = db.prepare('SELECT * FROM trades WHERE id = ?').get(info.lastInsertRowid);
-    return res.status(201).json(enrichTrade(created));
-  } catch (error) {
-    console.error('createTrade error:', error);
-    return res.status(500).json({ error: 'Error al crear la operación' });
-  }
-};
-
-exports.updateTrade = (req, res) => {
-  try {
-    const { id } = req.params;
-    const { date, assetType, ticker, operation, quantity, price, fee, ccl, notes } = req.body;
-
-    const existing = db.prepare('SELECT * FROM trades WHERE id = ?').get(id);
-    if (!existing) {
-      return res.status(404).json({ error: 'Operación no encontrada' });
     }
+    const s = bySymbol[t.ticker];
 
-    const stmt = db.prepare(`
-      UPDATE trades
-      SET date = ?, assetType = ?, ticker = ?, operation = ?, quantity = ?, price = ?, fee = ?, ccl = ?, notes = ?
-      WHERE id = ?
-    `);
+    const hasCCL = Number(t.ccl) > 0;
+    if (!hasCCL) s.usdIncomplete = true;
+    const priceUSD = hasCCL ? t.price / t.ccl : 0;
+    const feeUSD = hasCCL ? t.fee / t.ccl : 0;
 
-    stmt.run(
-      date,
-      assetType,
-      ticker.trim().toUpperCase(),
-      operation,
-      Number(quantity),
-      Number(price),
-      Number(fee || 0),
-      ccl !== null && ccl !== undefined && ccl !== '' ? Number(ccl) : null,
-      notes ? notes.trim() : '',
-      id
-    );
+    if (t.operation === 'COMPRA') {
+      const costoPrevio = s.avgCost * s.quantity;
+      const costoPrevioUSD = s.avgCostUSD * s.quantity;
+      const nuevaCantidad = s.quantity + t.quantity;
 
-    const updated = db.prepare('SELECT * FROM trades WHERE id = ?').get(id);
-    return res.status(200).json(enrichTrade(updated));
-  } catch (error) {
-    console.error('updateTrade error:', error);
-    return res.status(500).json({ error: 'Error al actualizar la operación' });
-  }
-};
+      const nuevoCosto = costoPrevio + t.quantity * t.price + t.fee;
+      const nuevoCostoUSD = costoPrevioUSD + t.quantity * priceUSD + feeUSD;
 
-exports.deleteTrade = (req, res) => {
-  try {
-    const { id } = req.params;
-    const existing = db.prepare('SELECT * FROM trades WHERE id = ?').get(id);
-    if (!existing) {
-      return res.status(404).json({ error: 'Operación no encontrada' });
+      s.avgCost = nuevaCantidad > 0 ? nuevoCosto / nuevaCantidad : 0;
+      s.avgCostUSD = nuevaCantidad > 0 ? nuevoCostoUSD / nuevaCantidad : 0;
+      s.quantity = nuevaCantidad;
+      s.invested = nuevoCosto;
+      s.investedUSD = nuevoCostoUSD;
+    } else {
+      const pl = t.quantity * (t.price - s.avgCost) - t.fee;
+      const plUSD = t.quantity * (priceUSD - s.avgCostUSD) - feeUSD;
+      s.realizedPL += pl;
+      s.realizedPLUSD += plUSD;
+      s.quantity = Math.max(0, s.quantity - t.quantity);
+      s.invested = s.avgCost * s.quantity;
+      s.investedUSD = s.avgCostUSD * s.quantity;
     }
-
-    db.prepare('DELETE FROM trades WHERE id = ?').run(id);
-    return res.status(200).json({ message: 'Operación eliminada con éxito' });
-  } catch (error) {
-    console.error('deleteTrade error:', error);
-    return res.status(500).json({ error: 'Error al eliminar la operación' });
   }
-};
+
+  const bySymbolList = Object.values(bySymbol).map((s) => ({
+    ...s,
+    quantity: Math.round(s.quantity * 1e6) / 1e6,
+    avgCost: Math.round(s.avgCost * 100) / 100,
+    invested: Math.round(s.invested * 100) / 100,
+    realizedPL: Math.round(s.realizedPL * 100) / 100,
+    avgCostUSD: s.usdIncomplete ? null : Math.round(s.avgCostUSD * 100) / 100,
+    investedUSD: s.usdIncomplete ? null : Math.round(s.investedUSD * 100) / 100,
+    realizedPLUSD: s.usdIncomplete ? null : Math.round(s.realizedPLUSD * 100) / 100,
+  }));
+
+  const totals = {
+    realizedPL: Math.round(bySymbolList.reduce((acc, s) => acc + s.realizedPL, 0) * 100) / 100,
+    realizedPLUSD: Math.round(
+      bySymbolList.reduce((acc, s) => acc + (s.realizedPLUSD || 0), 0) * 100
+    ) / 100,
+    invested: Math.round(bySymbolList.reduce((acc, s) => acc + s.invested, 0) * 100) / 100,
+    investedUSD: Math.round(
+      bySymbolList.reduce((acc, s) => acc + (s.investedUSD || 0), 0) * 100
+    ) / 100,
+    openPositions: bySymbolList.filter((s) => s.quantity > 0).length,
+    totalTrades: trades.length,
+  };
+
+  return { bySymbol: bySymbolList, totals };
+}
+
+// GET /api/trades/summary
+function getSummary(req, res) {
+  const rows = db
+    .prepare('SELECT * FROM trades ORDER BY trade_date ASC, id ASC')
+    .all()
+    .map(formatTrade);
+  res.json(computeSummary(rows));
+}
+
+module.exports = { getAll, create, update, remove, getSummary };

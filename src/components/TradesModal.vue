@@ -21,6 +21,17 @@ const CEDEARS_REFRESH_MS = 30_000
 // que tipearlo a mano para operaciones viejas.
 const HISTORICAL_CCL_BASE = 'https://api.argentinadatos.com/v1/cotizaciones/dolares/contadoconliqui'
 
+// --- Precio en USD de la acción subyacente (mismo host que ya usamos para
+// CEDEARs, así evitamos depender de un tercero nuevo para esto) ---
+const USA_STOCKS_LIVE_URL = 'https://data912.com/live/usa_stocks'
+const USA_ADRS_LIVE_URL = 'https://data912.com/live/usa_adrs'
+const USA_PRICES_REFRESH_MS = 60_000
+
+// --- Ratio CEDEAR / acción subyacente (cuántos CEDEARs equivalen a 1 ---
+// acción). Fuente pública, best-effort: si no está disponible o quedó
+// desactualizada, el usuario la corrige a mano y el cálculo se ajusta solo.
+const CEDEAR_RATIOS_URL = 'https://ferminrp.github.io/google-sheets-argento/api/cedears.json'
+
 const trades = ref([])
 const summary = ref({
   bySymbol: [],
@@ -44,6 +55,15 @@ let intervaloCclActual = null
 const liveCedears = ref([])
 let intervaloCedears = null
 
+// --- Precio en USD de la acción subyacente (data912) ---
+const usaPrices = ref({}) // { TICKER: precioUSD }
+let intervaloUsaPrices = null
+
+// --- Ratio CEDEAR/acción. cedearRatiosAuto[ticker] === false significa que
+// el usuario lo corrigió a mano y no debe pisarse con el autocompletado. ---
+const cedearRatios = ref({})     // { TICKER: ratio numérico }
+const cedearRatiosAuto = reactive({}) // { TICKER: true | false }
+
 // --- Autocompletado del CCL en el formulario ---
 const cclLoading = ref(false)
 const cclIsAuto = ref(false)
@@ -63,7 +83,6 @@ function emptyForm() {
     price: '',
     fee: '',
     ccl: '',
-    ratio: 1,
     notes: '',
   }
 }
@@ -131,14 +150,36 @@ const openPositions = computed(() =>
   summary.value.bySymbol
     .filter((s) => s.quantity > 0)
     .map((s) => {
-      const livePrice = s.assetType === 'CEDEAR' ? getLivePrice(s.ticker) : null
+      const isCedear = s.assetType === 'CEDEAR'
+      const livePrice = isCedear ? getLivePrice(s.ticker) : null
       const marketValueARS = livePrice != null ? s.quantity * livePrice : null
       const unrealizedARS = marketValueARS != null ? marketValueARS - s.invested : null
       const unrealizedARSPct =
         marketValueARS != null && s.invested > 0 ? (unrealizedARS / s.invested) * 100 : null
 
-      const marketValueUSD =
-        marketValueARS != null && cclActual.value ? marketValueARS / cclActual.value : null
+      // --- Valuación en USD ---
+      // Para CEDEARs, el CCL "oficial" (dolarapi) puede diferir bastante del
+      // CCL implícito de cada CEDEAR en particular. Para no perder el precio
+      // real de ganancia/pérdida, valuamos directamente con la cantidad de
+      // acciones equivalentes (según el ratio) y el precio real de la acción
+      // en dólares (data912). Si falta el ratio o el precio subyacente,
+      // caemos de vuelta al CCL general como aproximación (marcada en la UI).
+      const ratio = isCedear ? getRatio(s.ticker) : null
+      const underlyingPriceUSD = isCedear ? getUnderlyingPriceUSD(s.ticker) : null
+      const usesRatioValuation = isCedear && ratio != null && underlyingPriceUSD != null
+
+      let marketValueUSD = null
+      if (usesRatioValuation) {
+        marketValueUSD = (s.quantity / ratio) * underlyingPriceUSD
+      } else if (marketValueARS != null && cclActual.value) {
+        marketValueUSD = marketValueARS / cclActual.value
+      }
+
+      // CCL implícito de este CEDEAR puntual, a modo informativo: cuánto
+      // "vale" el dólar si valuás por el precio real de la acción.
+      const impliedCCL =
+        usesRatioValuation && livePrice != null ? (livePrice * ratio) / underlyingPriceUSD : null
+
       const unrealizedUSD =
         marketValueUSD != null && !s.usdIncomplete && s.investedUSD != null
           ? marketValueUSD - s.investedUSD
@@ -152,6 +193,10 @@ const openPositions = computed(() =>
         marketValueARS,
         unrealizedARS,
         unrealizedARSPct,
+        ratio,
+        underlyingPriceUSD,
+        usesRatioValuation,
+        impliedCCL,
         marketValueUSD,
         unrealizedUSD,
         unrealizedUSDPct,
@@ -274,6 +319,92 @@ function getLivePrice(ticker) {
 }
 
 // =========================================================
+// PRECIO EN USD DE LA ACCIÓN SUBYACENTE (data912)
+// =========================================================
+async function loadUsaPrices() {
+  try {
+    const [stocksRes, adrsRes] = await Promise.allSettled([
+      fetch(USA_STOCKS_LIVE_URL),
+      fetch(USA_ADRS_LIVE_URL),
+    ])
+    const merged = {}
+    for (const settled of [stocksRes, adrsRes]) {
+      if (settled.status !== 'fulfilled' || !settled.value.ok) continue
+      const list = await settled.value.json()
+      for (const item of list) {
+        const sym = String(item.symbol || '').toUpperCase()
+        const price = Number(item.c)
+        if (sym && price > 0) merged[sym] = price
+      }
+    }
+    usaPrices.value = merged
+  } catch (e) {
+    console.error('No se pudo cargar el precio en USD de las acciones subyacentes', e)
+  }
+}
+
+function getUnderlyingPriceUSD(ticker) {
+  return usaPrices.value[ticker] ?? null
+}
+
+// =========================================================
+// RATIO CEDEAR / ACCIÓN SUBYACENTE
+// =========================================================
+// Acepta tanto "20" (20 CEDEARs = 1 acción) como formato "20:1" o, para
+// ratios inversos, "1:2" (1 CEDEAR = 2 acciones).
+function parseRatio(raw) {
+  if (raw === null || raw === undefined) return null
+  const str = String(raw).trim()
+  if (!str) return null
+  if (str.includes(':')) {
+    const [a, b] = str.split(':').map(Number)
+    if (!a || !b) return null
+    return a / b
+  }
+  const n = Number(str)
+  return n > 0 ? n : null
+}
+
+async function loadCedearRatios() {
+  try {
+    const res = await fetch(CEDEAR_RATIOS_URL)
+    if (!res.ok) throw new Error('No se pudo consultar la fuente de ratios')
+    const data = await res.json()
+    const items = Array.isArray(data) ? data : data.items || []
+    for (const item of items) {
+      const ticker = String(item.Cedears || item.ticker || '').toUpperCase()
+      const ratio = parseRatio(item.Ratio ?? item.ratio)
+      if (!ticker || !ratio) continue
+      // No pisamos un ratio que el usuario ya haya corregido a mano.
+      if (cedearRatiosAuto[ticker] === false) continue
+      cedearRatios.value[ticker] = ratio
+      cedearRatiosAuto[ticker] = true
+    }
+  } catch (e) {
+    // No es crítico: si falla, cada CEDEAR se puede cargar a mano.
+    console.error('No se pudo cargar la tabla de ratios de CEDEARs', e)
+  }
+}
+
+function getRatio(ticker) {
+  return cedearRatios.value[ticker] ?? null
+}
+
+// Permite al usuario corregir el ratio a mano (por ticker faltante o
+// desactualizado). Queda marcado como "manual" para no perderlo si
+// después se refresca la tabla automática.
+function setManualRatio(ticker, rawValue) {
+  const n = Number(rawValue)
+  if (n > 0) {
+    cedearRatios.value = { ...cedearRatios.value, [ticker]: n }
+  } else {
+    const { [ticker]: _omit, ...rest } = cedearRatios.value
+    cedearRatios.value = rest
+  }
+  cedearRatiosAuto[ticker] = false
+}
+
+// =========================================================
 // FORMULARIO
 // =========================================================
 function startEdit(trade) {
@@ -287,7 +418,6 @@ function startEdit(trade) {
   form.price = trade.price
   form.fee = trade.fee
   form.ccl = trade.ccl ?? ''
-  form.ratio = trade.ratio ?? 1
   form.notes = trade.notes
   // Al editar no pisamos el CCL ya cargado; si cambian la fecha, ahí sí
   // se vuelve a buscar automáticamente.
@@ -321,7 +451,6 @@ async function submitForm() {
     price: Number(form.price),
     fee: Number(form.fee) || 0,
     ccl: form.ccl === '' ? null : Number(form.ccl),
-    ratio: Number(form.ratio) || 1,
     notes: form.notes.trim(),
   }
 
@@ -374,6 +503,12 @@ onMounted(() => {
   loadLiveCedears()
   intervaloCedears = setInterval(loadLiveCedears, CEDEARS_REFRESH_MS)
 
+  loadUsaPrices()
+  intervaloUsaPrices = setInterval(loadUsaPrices, USA_PRICES_REFRESH_MS)
+
+  // Los ratios casi no cambian en el día a día, alcanza con cargarlos una vez.
+  loadCedearRatios()
+
   // Primer autocompletado del CCL para el formulario "hoy" en blanco.
   cclIsAuto.value = true
   autofillCCL()
@@ -382,6 +517,7 @@ onMounted(() => {
 onUnmounted(() => {
   if (intervaloCclActual) clearInterval(intervaloCclActual)
   if (intervaloCedears) clearInterval(intervaloCedears)
+  if (intervaloUsaPrices) clearInterval(intervaloUsaPrices)
 })
 </script>
 
@@ -497,10 +633,6 @@ onUnmounted(() => {
                   <span class="detail-value">{{ formatNum(t.quantity) }}</span>
                 </div>
                 <div class="detail-item">
-                  <span class="detail-label">Ratio</span>
-                  <span class="detail-value">{{ t.ratio || 1 }}</span>
-                </div>
-                <div class="detail-item">
                   <span class="detail-label">Precio (ARS)</span>
                   <span class="detail-value">${{ formatMoney(t.price) }}</span>
                 </div>
@@ -550,10 +682,12 @@ onUnmounted(() => {
                   <th>Cantidad</th>
                   <th>Costo prom. (ARS)</th>
                   <th title="Precio en vivo, solo CEDEARs (data912)">Precio actual (ARS)</th>
+                  <th title="Cuántos CEDEARs equivalen a 1 acción de la empresa en el exterior. Se autocompleta cuando es posible; si falta o quedó vieja, cargala a mano.">Ratio CEDEAR</th>
+                  <th title="CCL implícito de este CEDEAR puntual (precio CEDEAR × ratio ÷ precio real de la acción en USD). Puede diferir del CCL oficial.">CCL implícito</th>
                   <th>Valor actual (ARS)</th>
                   <th>Rendimiento (ARS)</th>
-                  <th>Valor actual (USD)</th>
-                  <th>Rendimiento (USD)</th>
+                  <th title="Con ratio conocido se calcula con el precio real de la acción en USD. Sin ratio, se aproxima con el CCL general (marcado con ≈).">Valor actual (USD)</th>
+                  <th title="Con ratio conocido se calcula con el precio real de la acción en USD. Sin ratio, se aproxima con el CCL general (marcado con ≈).">Rendimiento (USD)</th>
                 </tr>
               </thead>
               <tbody>
@@ -562,13 +696,38 @@ onUnmounted(() => {
                   <td>{{ formatNum(p.quantity) }}</td>
                   <td>${{ formatMoney(p.avgCost) }}</td>
                   <td>{{ p.livePrice != null ? `$${formatMoney(p.livePrice)}` : '—' }}</td>
+                  <td v-if="p.assetType === 'CEDEAR'">
+                    <div class="ratio-input-row">
+                      <input
+                        type="number" min="0" step="any"
+                        :value="p.ratio ?? ''"
+                        @change="setManualRatio(p.ticker, $event.target.value)"
+                        placeholder="ej: 10"
+                        class="ratio-input"
+                        title="Cantidad de CEDEARs por 1 acción"
+                      >
+                      <span v-if="p.ratio != null && cedearRatiosAuto[p.ticker] !== false" class="auto-tag">auto</span>
+                    </div>
+                  </td>
+                  <td v-else>—</td>
+                  <td>{{ p.impliedCCL != null ? `$${formatMoney(p.impliedCCL)}` : '—' }}</td>
                   <td>{{ p.marketValueARS != null ? `$${formatMoney(p.marketValueARS)}` : '—' }}</td>
                   <td v-if="p.unrealizedARS === null">—</td>
                   <td v-else :class="p.unrealizedARS >= 0 ? 'pl-pos' : 'pl-neg'">
                     {{ p.unrealizedARS >= 0 ? '+' : '' }}${{ formatMoney(p.unrealizedARS) }}
                     <span class="pct-tag">({{ formatPct(p.unrealizedARSPct) }})</span>
                   </td>
-                  <td>{{ p.marketValueUSD != null ? `US$${formatMoney(p.marketValueUSD)}` : '—' }}</td>
+                  <td>
+                    <template v-if="p.marketValueUSD != null">
+                      US${{ formatMoney(p.marketValueUSD) }}
+                      <span
+                        v-if="p.assetType === 'CEDEAR'"
+                        class="pct-tag"
+                        :title="p.usesRatioValuation ? 'Valor real: calculado con ratio + precio de la acción' : 'Aproximado con el CCL general (falta ratio o precio de la acción)'"
+                      >{{ p.usesRatioValuation ? '✓' : '≈' }}</span>
+                    </template>
+                    <template v-else>—</template>
+                  </td>
                   <td v-if="p.unrealizedUSD === null">—</td>
                   <td v-else :class="p.unrealizedUSD >= 0 ? 'pl-pos' : 'pl-neg'">
                     {{ p.unrealizedUSD >= 0 ? '+' : '' }}US${{ formatMoney(p.unrealizedUSD) }}
@@ -580,7 +739,9 @@ onUnmounted(() => {
           </div>
           <div class="table-hint">
             Precio en vivo solo para CEDEARs (fuente: data912.com, cada 30s). Para acciones argentinas
-            todavía no hay precio en vivo conectado acá.
+            todavía no hay precio en vivo conectado acá. El valor y rendimiento en USD de los CEDEARs se
+            calcula con el ratio real contra la acción subyacente (✓); si el ratio no está disponible
+            se aproxima con el CCL general (≈) — completalo a mano en "Ratio CEDEAR" para tener el número exacto.
           </div>
         </div>
 
@@ -653,10 +814,6 @@ onUnmounted(() => {
               <input type="number" min="0" step="any" v-model="form.quantity" placeholder="Ej: 100" required>
             </div>
             <div class="form-field">
-              <label>Ratio (ej: 10, 20)</label>
-              <input type="number" min="0.001" step="any" v-model="form.ratio" placeholder="Ej: 10" required>
-            </div>
-            <div class="form-field">
               <label>Precio unitario ($)</label>
               <input type="number" min="0" step="any" v-model="form.price" placeholder="Ej: 5230" required>
             </div>
@@ -697,67 +854,6 @@ onUnmounted(() => {
           </div>
         </form>
 
-        <!-- Tabla de operaciones -->
-        <div class="table-header-row">
-          <div class="section-title">Historial ({{ filteredTrades.length }})</div>
-          <div class="search-box">
-            <input
-              type="text"
-              v-model="searchQuery"
-              placeholder="Buscar por ticker..."
-              style="text-transform:uppercase"
-            >
-            <button v-if="searchQuery" type="button" class="search-clear" @click="searchQuery = ''">✕</button>
-          </div>
-        </div>
-        <div class="trades-table-wrap">
-          <table class="trades-table" v-if="sortedTrades.length">
-            <thead>
-              <tr>
-                <th>Fecha</th>
-                <th>Activo</th>
-                <th>Ticker</th>
-                <th>Operación</th>
-                <th>Cantidad</th>
-                <th>Ratio</th>
-                <th>Precio (ARS)</th>
-                <th>CCL</th>
-                <th>Precio (USD)</th>
-                <th>Comisión</th>
-                <th>Total</th>
-                <th>Notas</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="t in paginatedTrades" :key="t.id" :class="{ 'row-editing': editingId === t.id }">
-                <td>{{ formatDate(t.date) }}</td>
-                <td><span class="badge" :class="t.assetType === 'CEDEAR' ? 'badge-cedear' : 'badge-ar'">{{ t.assetType === 'CEDEAR' ? 'CEDEAR' : 'Acción AR' }}</span></td>
-                <td class="ticker-cell">{{ t.ticker }}</td>
-                <td><span class="badge" :class="t.operation === 'COMPRA' ? 'badge-buy' : 'badge-sell'">{{ t.operation === 'COMPRA' ? 'Compra' : 'Venta' }}</span></td>
-                <td>{{ formatNum(t.quantity) }}</td>
-                <td>{{ t.ratio || 1 }}</td>
-                <td>${{ formatMoney(t.price) }}</td>
-                <td>{{ t.ccl ? `$${formatMoney(t.ccl)}` : '—' }}</td>
-                <td>{{ t.priceUSD != null ? `US$${formatMoney(t.priceUSD)}` : '—' }}</td>
-                <td>${{ formatMoney(t.fee) }}</td>
-                <td>${{ formatMoney(t.total) }}</td>
-                <td class="notes-cell" :title="t.notes">{{ t.notes || '—' }}</td>
-                <td class="actions-cell">
-                  <button class="icon-btn" title="Editar" @click="startEdit(t)">✎</button>
-                  <button class="icon-btn icon-btn-danger" title="Eliminar" @click="removeTrade(t)">🗑</button>
-                </td>
-              </tr>
-            </tbody>
-          </table>
-          <div v-else class="empty-state">Todavía no cargaste ninguna operación.</div>
-        </div>
-
-        <div v-if="sortedTrades.length" class="pagination-bar">
-          <button type="button" class="page-btn" :disabled="currentPage === 1" @click="goToPage(currentPage - 1)">← Anterior</button>
-          <span class="page-info">Página {{ currentPage }} de {{ totalPages }} · mostrando {{ paginatedTrades.length }} de {{ sortedTrades.length }}</span>
-          <button type="button" class="page-btn" :disabled="currentPage === totalPages" @click="goToPage(currentPage + 1)">Siguiente →</button>
-        </div>
         </template>
       </template>
     </div>
@@ -1279,6 +1375,28 @@ onUnmounted(() => {
 .ccl-hint {
   font-size: 10px;
   color: #fbbf24;
+}
+
+.ratio-input-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.ratio-input {
+  width: 56px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 6px;
+  color: var(--text);
+  font-size: 12px;
+  font-family: inherit;
+}
+
+.ratio-input:focus {
+  outline: none;
+  border-color: var(--blue, #2563eb);
 }
 
 .form-field input,

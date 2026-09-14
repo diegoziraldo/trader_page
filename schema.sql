@@ -61,13 +61,14 @@ CREATE TABLE IF NOT EXISTS checklist_indicators (
 -- Bitácora de operaciones (trades) de CEDEARs y acciones argentinas.
 CREATE TABLE IF NOT EXISTS trades (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  date TEXT NOT NULL,
+  trade_date TEXT NOT NULL,
   asset_type TEXT NOT NULL CHECK (asset_type IN ('CEDEAR', 'ACCION_AR')) DEFAULT 'CEDEAR',
   ticker TEXT NOT NULL,
   operation TEXT NOT NULL CHECK (operation IN ('COMPRA', 'VENTA')) DEFAULT 'COMPRA',
   quantity REAL NOT NULL,
   price REAL NOT NULL,
-  fee REAL DEFAULT '',
+  fee REAL NOT NULL DEFAULT 0,
+  notes TEXT NOT NULL DEFAULT '',
   -- Dólar CCL vigente el día de la operación. Con esto se puede calcular el
   -- rendimiento en USD de cada CEDEAR/acción (precio_ars / ccl), además del
   -- rendimiento en pesos. Nullable: operaciones viejas pueden no tenerlo
@@ -76,11 +77,6 @@ CREATE TABLE IF NOT EXISTS trades (
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
-
-
-
-
-
 
 -- Planilla profesional de trading (plan de trade completo, para cualquier
 -- tipo de instrumento: acciones, CEDEARs, forex, futuros, cripto, opciones,
