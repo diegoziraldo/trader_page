@@ -4,6 +4,20 @@ const MARKETS = ['ACCION', 'CEDEAR', 'FOREX', 'FUTURO', 'CRIPTO', 'OPCION', 'IND
 const DIRECTIONS = ['LONG', 'SHORT'];
 const STATUSES = ['ABIERTO', 'CERRADO', 'CANCELADO'];
 
+// El estado de una operación NUNCA se guarda "a mano": se deriva de sus
+// propios datos, salvo "CANCELADO" que sí es una decisión explícita del
+// usuario (una operación que se planificó pero no se llegó a ejecutar).
+//   - Si tiene fecha de salida Y precio de salida  -> CERRADO
+//   - Si no                                        -> ABIERTO
+// Esto corre tanto al guardar como al leer, así que incluso los registros
+// viejos que hayan quedado con un estado manual desactualizado se
+// autocorrigen solos apenas se listan, sin necesidad de migrar nada.
+function resolveStatus(entryDate, exitDate, exitPrice, requestedStatus) {
+  if (requestedStatus === 'CANCELADO') return 'CANCELADO';
+  const hasExit = !!exitDate && exitPrice !== null && exitPrice !== undefined && exitPrice !== '';
+  return hasExit ? 'CERRADO' : 'ABIERTO';
+}
+
 // Convierte una fila cruda de la tabla en el objeto que consume el frontend,
 // calculando al vuelo las métricas derivadas (R:R planeado, resultado en $
 // y en R) para no duplicar datos que puedan quedar desincronizados.
@@ -17,6 +31,8 @@ function formatEntry(row) {
   const fee = row.fee || 0;
   const isLong = row.direction === 'LONG';
 
+  const status = resolveStatus(row.entry_date, row.exit_date, row.exit_price, row.status);
+
   let plannedRR = null;
   if (stopLoss != null && takeProfit != null) {
     const risk = Math.abs(entryPrice - stopLoss);
@@ -24,8 +40,12 @@ function formatEntry(row) {
     plannedRR = risk > 0 ? Math.round((reward / risk) * 100) / 100 : null;
   }
 
+  // El resultado ($/R) solo tiene sentido una vez que la operación está
+  // realmente cerrada (fecha + precio de salida cargados); si no, aunque
+  // haya un precio de salida suelto a medio cargar, no se muestra un
+  // resultado que todavía no es real.
   let resultAmount = null;
-  if (exitPrice != null) {
+  if (status === 'CERRADO') {
     const priceDiff = isLong ? exitPrice - entryPrice : entryPrice - exitPrice;
     resultAmount = Math.round((priceDiff * size * leverage - fee) * 100) / 100;
   }
@@ -53,7 +73,7 @@ function formatEntry(row) {
     fee: row.fee,
     riskAmount: row.risk_amount,
     riskPercent: row.risk_percent,
-    status: row.status,
+    status,
     emotion: row.emotion,
     followedPlan: !!row.followed_plan,
     entryReason: row.entry_reason,
@@ -76,6 +96,21 @@ function validateBody(body) {
   if (!(Number(body.entryPrice) > 0)) errors.push('entryPrice debe ser mayor a 0');
   if (!(Number(body.size) > 0)) errors.push('size debe ser mayor a 0');
   if (body.status && !STATUSES.includes(body.status)) errors.push('status inválido');
+
+  // Fecha y precio de salida van de a par: o se cargan los dos, o ninguno.
+  // Si no, quedaría una operación "cerrada a medias" con un dato incompleto.
+  const hasExitDate = !!body.exitDate;
+  const hasExitPrice = body.exitPrice !== null && body.exitPrice !== undefined && body.exitPrice !== '';
+  if (hasExitDate !== hasExitPrice) {
+    errors.push('Para cerrar la operación completá la fecha Y el precio de salida (o dejá ambos vacíos)');
+  }
+  if (hasExitPrice && !(Number(body.exitPrice) > 0)) {
+    errors.push('exitPrice debe ser mayor a 0');
+  }
+  if (hasExitDate && body.entryDate && body.exitDate < body.entryDate) {
+    errors.push('La fecha de salida no puede ser anterior a la fecha de entrada');
+  }
+
   return errors;
 }
 
@@ -121,7 +156,7 @@ function create(req, res) {
       Number(b.fee) || 0,
       b.riskAmount != null && b.riskAmount !== '' ? Number(b.riskAmount) : null,
       b.riskPercent != null && b.riskPercent !== '' ? Number(b.riskPercent) : null,
-      b.status || 'ABIERTO',
+      resolveStatus(b.entryDate, b.exitDate, b.exitPrice, b.status),
       b.emotion || '',
       b.followedPlan === false ? 0 : 1,
       b.entryReason || '',
@@ -141,6 +176,8 @@ function update(req, res) {
   const b = req.body;
   const merged = {
     entryDate: b.entryDate ?? existing.entry_date,
+    exitDate: b.exitDate !== undefined ? (b.exitDate || null) : existing.exit_date,
+    exitPrice: b.exitPrice !== undefined ? (b.exitPrice === '' ? null : b.exitPrice) : existing.exit_price,
     market: b.market ?? existing.market,
     symbol: b.symbol ?? existing.symbol,
     direction: b.direction ?? existing.direction,
@@ -156,7 +193,7 @@ function update(req, res) {
 
   const values = {
     entryDate: merged.entryDate,
-    exitDate: pick('exitDate', 'exit_date', (v) => v || null),
+    exitDate: merged.exitDate,
     market: merged.market,
     symbol: String(merged.symbol).trim().toUpperCase(),
     direction: merged.direction,
@@ -165,13 +202,13 @@ function update(req, res) {
     entryPrice: Number(merged.entryPrice),
     stopLoss: pick('stopLoss', 'stop_loss', (v) => (v === '' || v == null ? null : Number(v))),
     takeProfit: pick('takeProfit', 'take_profit', (v) => (v === '' || v == null ? null : Number(v))),
-    exitPrice: pick('exitPrice', 'exit_price', (v) => (v === '' || v == null ? null : Number(v))),
+    exitPrice: merged.exitPrice === '' || merged.exitPrice == null ? null : Number(merged.exitPrice),
     size: Number(merged.size),
     leverage: pick('leverage', 'leverage', (v) => Number(v) || 1),
     fee: pick('fee', 'fee', (v) => Number(v) || 0),
     riskAmount: pick('riskAmount', 'risk_amount', (v) => (v === '' || v == null ? null : Number(v))),
     riskPercent: pick('riskPercent', 'risk_percent', (v) => (v === '' || v == null ? null : Number(v))),
-    status: merged.status,
+    status: resolveStatus(merged.entryDate, merged.exitDate, merged.exitPrice, merged.status),
     emotion: pick('emotion', 'emotion'),
     followedPlan: b.followedPlan !== undefined ? (b.followedPlan ? 1 : 0) : existing.followed_plan,
     entryReason: pick('entryReason', 'entry_reason'),
