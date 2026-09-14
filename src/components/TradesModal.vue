@@ -63,6 +63,7 @@ function emptyForm() {
     price: '',
     fee: '',
     ccl: '',
+    ratio: 1,
     notes: '',
   }
 }
@@ -286,6 +287,7 @@ function startEdit(trade) {
   form.price = trade.price
   form.fee = trade.fee
   form.ccl = trade.ccl ?? ''
+  form.ratio = trade.ratio ?? 1
   form.notes = trade.notes
   // Al editar no pisamos el CCL ya cargado; si cambian la fecha, ahí sí
   // se vuelve a buscar automáticamente.
@@ -319,6 +321,7 @@ async function submitForm() {
     price: Number(form.price),
     fee: Number(form.fee) || 0,
     ccl: form.ccl === '' ? null : Number(form.ccl),
+    ratio: Number(form.ratio) || 1,
     notes: form.notes.trim(),
   }
 
@@ -494,6 +497,10 @@ onUnmounted(() => {
                   <span class="detail-value">{{ formatNum(t.quantity) }}</span>
                 </div>
                 <div class="detail-item">
+                  <span class="detail-label">Ratio</span>
+                  <span class="detail-value">{{ t.ratio || 1 }}</span>
+                </div>
+                <div class="detail-item">
                   <span class="detail-label">Precio (ARS)</span>
                   <span class="detail-value">${{ formatMoney(t.price) }}</span>
                 </div>
@@ -646,6 +653,10 @@ onUnmounted(() => {
               <input type="number" min="0" step="any" v-model="form.quantity" placeholder="Ej: 100" required>
             </div>
             <div class="form-field">
+              <label>Ratio (ej: 10, 20)</label>
+              <input type="number" min="0.001" step="any" v-model="form.ratio" placeholder="Ej: 10" required>
+            </div>
+            <div class="form-field">
               <label>Precio unitario ($)</label>
               <input type="number" min="0" step="any" v-model="form.price" placeholder="Ej: 5230" required>
             </div>
@@ -708,6 +719,7 @@ onUnmounted(() => {
                 <th>Ticker</th>
                 <th>Operación</th>
                 <th>Cantidad</th>
+                <th>Ratio</th>
                 <th>Precio (ARS)</th>
                 <th>CCL</th>
                 <th>Precio (USD)</th>
@@ -724,6 +736,7 @@ onUnmounted(() => {
                 <td class="ticker-cell">{{ t.ticker }}</td>
                 <td><span class="badge" :class="t.operation === 'COMPRA' ? 'badge-buy' : 'badge-sell'">{{ t.operation === 'COMPRA' ? 'Compra' : 'Venta' }}</span></td>
                 <td>{{ formatNum(t.quantity) }}</td>
+                <td>{{ t.ratio || 1 }}</td>
                 <td>${{ formatMoney(t.price) }}</td>
                 <td>{{ t.ccl ? `$${formatMoney(t.ccl)}` : '—' }}</td>
                 <td>{{ t.priceUSD != null ? `US$${formatMoney(t.priceUSD)}` : '—' }}</td>
