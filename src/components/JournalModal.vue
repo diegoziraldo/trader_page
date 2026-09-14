@@ -84,7 +84,7 @@ function emptyForm() {
     fee: '',
     riskAmount: '',
     riskPercent: '',
-    status: 'ABIERTO',
+    cancelled: false, // única forma manual de marcar el estado: el resto se autocalcula
     emotion: '',
     followedPlan: true,
     entryReason: '',
@@ -94,6 +94,17 @@ function emptyForm() {
 }
 
 const form = reactive(emptyForm())
+
+// El estado NUNCA se elige a mano: se deriva de si ya se cargó fecha Y
+// precio de salida (igual que hace el backend). La única decisión manual
+// posible es marcarla como cancelada. Esto evita que una operación quede
+// "cerrada a medias" o que el usuario crea que cambió el estado sin que en
+// realidad haya pasado nada.
+const previewStatus = computed(() => {
+  if (form.cancelled) return 'CANCELADO'
+  const hasExit = !!form.exitDate && form.exitPrice !== '' && form.exitPrice != null
+  return hasExit ? 'CERRADO' : 'ABIERTO'
+})
 const formError = ref('')
 
 function formatMoney(n) {
@@ -125,11 +136,20 @@ function daysElapsed(entry) {
 }
 
 function formatDays(entry) {
+  if (entry.status === 'CANCELADO') return '—'
   const days = daysElapsed(entry)
   if (days === null) return '—'
   const label = days === 1 ? 'día' : 'días'
   const enCurso = entry.status === 'ABIERTO' && !entry.exitDate
   return `${days} ${label}${enCurso ? ' (en curso)' : ''}`
+}
+
+// Para el rango "entrada → salida": si no hay fecha de salida, aclara si es
+// porque sigue abierta o porque se canceló (no "en curso" para una
+// cancelada, que nunca estuvo realmente corriendo).
+function formatExitLabel(entry) {
+  if (entry.exitDate) return formatDate(entry.exitDate)
+  return entry.status === 'CANCELADO' ? 'cancelada' : 'en curso'
 }
 
 const filteredEntries = computed(() => {
@@ -218,7 +238,7 @@ function startEdit(entry) {
   form.fee = entry.fee ?? ''
   form.riskAmount = entry.riskAmount ?? ''
   form.riskPercent = entry.riskPercent ?? ''
-  form.status = entry.status
+  form.cancelled = entry.status === 'CANCELADO'
   form.emotion = entry.emotion || ''
   form.followedPlan = !!entry.followedPlan
   form.entryReason = entry.entryReason || ''
@@ -241,6 +261,20 @@ async function submitForm() {
   if (!(Number(form.entryPrice) > 0)) return (formError.value = 'El precio de entrada debe ser mayor a 0')
   if (!(Number(form.size) > 0)) return (formError.value = 'El tamaño de la posición debe ser mayor a 0')
 
+  // Fecha y precio de salida van de a par: para que la operación se cierre
+  // hacen falta los dos datos (si no, quedaría "cerrada a medias").
+  const hasExitDate = !!form.exitDate
+  const hasExitPrice = form.exitPrice !== '' && form.exitPrice != null
+  if (hasExitDate !== hasExitPrice) {
+    return (formError.value = 'Para cerrar la operación completá la fecha Y el precio de salida (o dejá los dos vacíos)')
+  }
+  if (hasExitPrice && !(Number(form.exitPrice) > 0)) {
+    return (formError.value = 'El precio de salida debe ser mayor a 0')
+  }
+  if (hasExitDate && form.exitDate < form.entryDate) {
+    return (formError.value = 'La fecha de salida no puede ser anterior a la fecha de entrada')
+  }
+
   const payload = {
     entryDate: form.entryDate,
     exitDate: form.exitDate || null,
@@ -258,7 +292,7 @@ async function submitForm() {
     fee: Number(form.fee) || 0,
     riskAmount: form.riskAmount === '' ? null : Number(form.riskAmount),
     riskPercent: form.riskPercent === '' ? null : Number(form.riskPercent),
-    status: form.status,
+    status: previewStatus.value,
     emotion: form.emotion,
     followedPlan: !!form.followedPlan,
     entryReason: form.entryReason.trim(),
@@ -443,7 +477,7 @@ onMounted(() => {
               </div>
 
               <div class="entry-card-dates">
-                {{ formatDate(e.entryDate) }} → {{ e.exitDate ? formatDate(e.exitDate) : 'en curso' }}
+                {{ formatDate(e.entryDate) }} → {{ formatExitLabel(e) }}
                 <span class="pct-tag">({{ formatDays(e) }})</span>
               </div>
 
@@ -586,14 +620,6 @@ onMounted(() => {
               <label>Cuenta / Broker</label>
               <input type="text" v-model="form.account" placeholder="Ej: IOL, Cocos, MT5 Live">
             </div>
-            <div class="form-field">
-              <label>Estado</label>
-              <select v-model="form.status">
-                <option value="ABIERTO">Abierto</option>
-                <option value="CERRADO">Cerrado</option>
-                <option value="CANCELADO">Cancelado</option>
-              </select>
-            </div>
           </div>
 
           <div class="form-subsection-title">Gestión de riesgo</div>
@@ -636,11 +662,34 @@ onMounted(() => {
           <div class="form-grid">
             <div class="form-field">
               <label>Fecha de salida</label>
-              <input type="date" v-model="form.exitDate">
+              <input type="date" v-model="form.exitDate" :min="form.entryDate" :disabled="form.cancelled">
             </div>
             <div class="form-field">
               <label>Precio de salida</label>
-              <input type="number" min="0" step="any" v-model="form.exitPrice" placeholder="Opcional">
+              <input type="number" min="0" step="any" v-model="form.exitPrice" placeholder="Opcional" :disabled="form.cancelled">
+            </div>
+            <div class="form-field form-field-checkbox">
+              <label class="checkbox-label">
+                <input type="checkbox" v-model="form.cancelled">
+                Cancelar esta operación (no se llegó a ejecutar)
+              </label>
+            </div>
+            <div class="form-field">
+              <label>Estado (automático)</label>
+              <div class="status-preview">
+                <span class="badge" :class="{
+                  'badge-open': previewStatus === 'ABIERTO',
+                  'badge-closed': previewStatus === 'CERRADO',
+                  'badge-cancel': previewStatus === 'CANCELADO',
+                }">{{ STATUS_LABELS[previewStatus] }}</span>
+              </div>
+              <span class="field-hint">
+                {{ previewStatus === 'CERRADO'
+                  ? 'Se cierra sola porque cargaste fecha y precio de salida.'
+                  : previewStatus === 'CANCELADO'
+                    ? 'Marcada como cancelada a mano.'
+                    : 'Sigue abierta hasta que cargues fecha Y precio de salida.' }}
+              </span>
             </div>
           </div>
 
@@ -813,7 +862,7 @@ onMounted(() => {
                         </div>
                         <div class="detail-item">
                           <span class="detail-label">Cargada</span>
-                          <span class="detail-value">{{ formatDate(e.entryDate) }} → {{ e.exitDate ? formatDate(e.exitDate) : 'en curso' }}</span>
+                          <span class="detail-value">{{ formatDate(e.entryDate) }} → {{ formatExitLabel(e) }}</span>
                         </div>
                       </div>
                       <div class="detail-col detail-col-wide">
@@ -1418,6 +1467,23 @@ onMounted(() => {
   color: var(--text);
   font-weight: 600;
   cursor: pointer;
+}
+
+.status-preview {
+  display: flex;
+  align-items: center;
+  height: 30px;
+}
+
+.field-hint {
+  font-size: 10px;
+  color: var(--text-dim);
+  line-height: 1.4;
+}
+
+.form-field input:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .checkbox-label input[type="checkbox"] {
