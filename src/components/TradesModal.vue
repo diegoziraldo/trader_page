@@ -869,22 +869,23 @@ onUnmounted(() => {
   align-items: center;
   justify-content: center;
   z-index: 1000;
-  padding: 20px;
+  padding: 24px;
 }
 
 .trades-modal {
   background: var(--panel);
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: 14px;
   width: 100%;
-  max-width: 1360px;
-  max-height: 95vh;
+  max-width: 1440px;
+  max-height: 96vh;
   overflow-y: auto;
-  padding: 28px 32px;
+  padding: 32px 40px;
   display: flex;
   flex-direction: column;
-  gap: 22px;
-  font-size: 14px;
+  gap: 28px;
+  font-size: 15px;
+  line-height: 1.5;
 }
 
 .trades-header {
@@ -892,16 +893,16 @@ onUnmounted(() => {
   align-items: center;
   justify-content: space-between;
   border-bottom: 1px solid var(--border);
-  padding-bottom: 16px;
+  padding-bottom: 20px;
 }
 
 .trades-title {
-  font-size: 19px;
+  font-size: 22px;
   font-weight: 700;
   color: var(--text);
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 12px;
 }
 
 .close-btn {
@@ -909,10 +910,10 @@ onUnmounted(() => {
   border: 1px solid var(--border);
   border-radius: 8px;
   color: var(--text-dim);
-  width: 34px;
-  height: 34px;
+  width: 38px;
+  height: 38px;
   cursor: pointer;
-  font-size: 16px;
+  font-size: 17px;
 }
 
 .close-btn:hover {
@@ -924,8 +925,8 @@ onUnmounted(() => {
 .empty-state {
   text-align: center;
   color: var(--text-dim);
-  font-size: 13px;
-  padding: 24px 0;
+  font-size: 14px;
+  padding: 32px 0;
 }
 
 .trades-error,
@@ -933,46 +934,43 @@ onUnmounted(() => {
   background: rgba(239, 68, 68, 0.1);
   border: 1px solid rgba(239, 68, 68, 0.4);
   color: #ef4444;
-  padding: 8px 10px;
-  border-radius: 6px;
-  font-size: 12px;
+  padding: 12px 14px;
+  border-radius: 8px;
+  font-size: 13px;
 }
 
 .summary-bar {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
-  gap: 14px;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 16px;
 }
 
 .summary-card {
   background: var(--bg);
   border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 14px 16px;
+  border-radius: 12px;
+  padding: 18px 20px;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
 }
 
 .summary-label {
-  font-size: 11px;
+  font-size: 12px;
   color: var(--text-dim);
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
+  letter-spacing: 0.2px;
 }
 
 .summary-card strong {
-  font-size: 19px;
+  font-size: 24px;
   color: var(--text);
   font-family: var(--font-num, inherit);
 }
 
 .section-title {
-  font-size: 12.5px;
+  font-size: 15px;
   font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  color: var(--text-dim);
+  color: var(--text);
 }
 
 .table-header-row {
@@ -980,7 +978,7 @@ onUnmounted(() => {
   align-items: center;
   justify-content: space-between;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 12px;
 }
 
 .search-box {
@@ -988,18 +986,18 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   flex: 1;
-  min-width: 160px;
-  max-width: 260px;
+  min-width: 200px;
+  max-width: 320px;
 }
 
 .search-box input {
   width: 100%;
   background: var(--panel);
   border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 6px 26px 6px 10px;
+  border-radius: 8px;
+  padding: 10px 32px 10px 14px;
   color: var(--text);
-  font-size: 12px;
+  font-size: 14px;
   font-family: inherit;
 }
 
@@ -1010,13 +1008,13 @@ onUnmounted(() => {
 
 .search-clear {
   position: absolute;
-  right: 6px;
+  right: 8px;
   background: none;
   border: none;
   color: var(--text-dim);
   cursor: pointer;
-  font-size: 11px;
-  padding: 2px;
+  font-size: 13px;
+  padding: 4px;
 }
 
 .search-clear:hover {
@@ -1027,17 +1025,17 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 14px;
-  padding-top: 4px;
+  gap: 18px;
+  padding-top: 6px;
 }
 
 .page-btn {
   background: var(--bg);
   border: 1px solid var(--border);
   color: var(--text-dim);
-  border-radius: 6px;
-  padding: 6px 12px;
-  font-size: 11px;
+  border-radius: 8px;
+  padding: 9px 16px;
+  font-size: 13px;
   font-weight: 600;
   cursor: pointer;
 }
@@ -1053,25 +1051,25 @@ onUnmounted(() => {
 }
 
 .page-info {
-  font-size: 11px;
+  font-size: 13px;
   color: var(--text-dim);
   white-space: nowrap;
 }
 
 .view-tabs {
   display: flex;
-  gap: 10px;
+  gap: 12px;
   border-bottom: 1px solid var(--border);
-  padding-bottom: 16px;
+  padding-bottom: 20px;
 }
 
 .view-tab {
   background: var(--bg);
   border: 1px solid var(--border);
   color: var(--text-dim);
-  border-radius: 9px;
-  padding: 10px 16px;
-  font-size: 13px;
+  border-radius: 10px;
+  padding: 12px 20px;
+  font-size: 14px;
   font-weight: 700;
   cursor: pointer;
 }
@@ -1090,23 +1088,23 @@ onUnmounted(() => {
 .full-detail-screen {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 18px;
 }
 
 .entry-cards {
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 16px;
 }
 
 .entry-card {
   background: var(--bg);
   border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 18px 20px;
+  border-radius: 12px;
+  padding: 22px 24px;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 16px;
 }
 
 .entry-card-header {
@@ -1114,71 +1112,68 @@ onUnmounted(() => {
   align-items: center;
   justify-content: space-between;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 10px;
 }
 
 .entry-card-title {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   flex-wrap: wrap;
 }
 
 .entry-card-title .ticker-cell {
-  font-size: 15px;
+  font-size: 18px;
 }
 
 .entry-card-actions {
   display: flex;
-  gap: 6px;
+  gap: 8px;
 }
 
 .entry-card-dates {
-  font-size: 11px;
+  font-size: 13px;
   color: var(--text-dim);
   font-family: var(--font-num, inherit);
 }
 
 .entry-card-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
-  gap: 12px;
-  padding: 12px 0;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 16px;
+  padding: 16px 0;
   border-top: 1px solid var(--border);
   border-bottom: 1px solid var(--border);
 }
 
 .entry-card-notes {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 14px;
 }
 
 .detail-item {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 5px;
   min-width: 0;
 }
 
 .detail-label {
-  font-size: 10.5px;
+  font-size: 12px;
   color: var(--text-dim);
-  text-transform: uppercase;
-  letter-spacing: 0.4px;
-  font-weight: 700;
 }
 
 .detail-value {
-  font-size: 13px;
+  font-size: 15px;
   color: var(--text);
   font-family: var(--font-num, inherit);
 }
 
 .detail-text {
-  font-size: 12px;
+  font-size: 14px;
   color: var(--text);
-  line-height: 1.5;
+  line-height: 1.6;
   white-space: pre-wrap;
   word-break: break-word;
   font-family: inherit;
@@ -1189,33 +1184,31 @@ onUnmounted(() => {
 .trades-table-wrap {
   overflow-x: auto;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: 10px;
 }
 
 .by-symbol-table,
 .trades-table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 13px;
+  font-size: 14.5px;
 }
 
 .by-symbol-table th,
 .trades-table th {
   text-align: left;
-  padding: 11px 14px;
+  padding: 14px 18px;
   background: var(--bg);
   color: var(--text-dim);
   font-weight: 600;
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.3px;
+  font-size: 12.5px;
   border-bottom: 1px solid var(--border);
   white-space: nowrap;
 }
 
 .by-symbol-table td,
 .trades-table td {
-  padding: 11px 14px;
+  padding: 14px 18px;
   border-bottom: 1px solid var(--border);
   color: var(--text);
   white-space: nowrap;
@@ -1232,13 +1225,14 @@ onUnmounted(() => {
 }
 
 .table-hint {
-  font-size: 11px;
+  font-size: 12.5px;
   color: var(--text-dim);
-  padding: 2px 2px 0;
+  line-height: 1.6;
+  padding: 4px 2px 0;
 }
 
 .pct-tag {
-  font-size: 10px;
+  font-size: 12px;
   opacity: 0.85;
 }
 
@@ -1248,10 +1242,11 @@ onUnmounted(() => {
 
 .ticker-cell {
   font-weight: 700;
+  font-size: 15px;
 }
 
 .notes-cell {
-  max-width: 160px;
+  max-width: 200px;
   overflow: hidden;
   text-overflow: ellipsis;
   font-family: inherit;
@@ -1260,11 +1255,10 @@ onUnmounted(() => {
 
 .badge {
   display: inline-block;
-  padding: 2px 8px;
+  padding: 4px 11px;
   border-radius: 999px;
-  font-size: 10px;
+  font-size: 11.5px;
   font-weight: 700;
-  text-transform: uppercase;
 }
 
 .badge-cedear {
@@ -1297,18 +1291,18 @@ onUnmounted(() => {
 
 .actions-cell {
   display: flex;
-  gap: 6px;
+  gap: 8px;
 }
 
 .icon-btn {
   background: var(--bg);
   border: 1px solid var(--border);
-  border-radius: 6px;
-  width: 26px;
-  height: 26px;
+  border-radius: 7px;
+  width: 32px;
+  height: 32px;
   cursor: pointer;
   color: var(--text-dim);
-  font-size: 12px;
+  font-size: 14px;
 }
 
 .icon-btn:hover {
@@ -1324,23 +1318,23 @@ onUnmounted(() => {
 .trade-form {
   background: var(--bg);
   border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 18px 20px;
+  border-radius: 12px;
+  padding: 24px 26px;
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 20px;
 }
 
 .form-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-  gap: 14px;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 18px;
 }
 
 .form-field {
   display: flex;
   flex-direction: column;
-  gap: 5px;
+  gap: 7px;
   min-width: 0;
 }
 
@@ -1349,23 +1343,22 @@ onUnmounted(() => {
 }
 
 .form-field label {
-  font-size: 11px;
+  font-size: 13px;
   color: var(--text-dim);
   font-weight: 600;
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 6px;
 }
 
 .auto-tag {
   color: #22c55e;
   font-weight: 600;
-  text-transform: none;
 }
 
 .ccl-input-row {
   display: flex;
-  gap: 6px;
+  gap: 8px;
 }
 
 .ccl-input-row input {
@@ -1374,16 +1367,17 @@ onUnmounted(() => {
 }
 
 .ccl-hint {
-  font-size: 10px;
+  font-size: 12px;
   color: #fbbf24;
+  line-height: 1.5;
 }
 
 .ratio-subrow {
   display: flex;
   align-items: center;
-  gap: 5px;
-  margin-top: 4px;
-  font-size: 11px;
+  gap: 7px;
+  margin-top: 6px;
+  font-size: 13px;
   color: var(--text-dim);
   white-space: nowrap;
 }
@@ -1393,13 +1387,13 @@ onUnmounted(() => {
 }
 
 .ratio-input {
-  width: 52px;
+  width: 64px;
   background: var(--panel);
   border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 3px 6px;
+  border-radius: 7px;
+  padding: 5px 8px;
   color: var(--text);
-  font-size: 11px;
+  font-size: 13px;
   font-family: inherit;
 }
 
@@ -1412,10 +1406,10 @@ onUnmounted(() => {
 .form-field select {
   background: var(--panel);
   border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 9px 10px;
+  border-radius: 8px;
+  padding: 12px 14px;
   color: var(--text);
-  font-size: 13px;
+  font-size: 15px;
   font-family: inherit;
   min-width: 0;
 }
@@ -1428,17 +1422,17 @@ onUnmounted(() => {
 
 .form-actions {
   display: flex;
-  gap: 10px;
+  gap: 12px;
 }
 
 .btn-primary {
   background: #2563eb;
   border: 1px solid #2563eb;
   color: white;
-  border-radius: 7px;
-  padding: 10px 18px;
+  border-radius: 9px;
+  padding: 13px 24px;
   font-weight: 600;
-  font-size: 13px;
+  font-size: 15px;
   cursor: pointer;
 }
 
@@ -1455,10 +1449,10 @@ onUnmounted(() => {
   background: var(--panel);
   border: 1px solid var(--border);
   color: var(--text-dim);
-  border-radius: 7px;
-  padding: 10px 18px;
+  border-radius: 9px;
+  padding: 13px 24px;
   font-weight: 600;
-  font-size: 13px;
+  font-size: 15px;
   cursor: pointer;
 }
 
@@ -1467,7 +1461,7 @@ onUnmounted(() => {
   border-color: var(--text-dim);
 }
 
-@media (max-width: 600px) {
+@media (max-width: 760px) {
   .trades-overlay {
     padding: 0;
   }
@@ -1475,10 +1469,14 @@ onUnmounted(() => {
     max-width: 100%;
     height: 100vh;
     border-radius: 0;
-    padding: 18px 16px;
+    padding: 22px 18px;
+    gap: 22px;
   }
   .form-field-wide {
     grid-column: span 1;
+  }
+  .summary-card strong {
+    font-size: 20px;
   }
 }
 </style>
