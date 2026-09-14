@@ -682,8 +682,6 @@ onUnmounted(() => {
                   <th>Cantidad</th>
                   <th>Costo prom. (ARS)</th>
                   <th title="Precio en vivo, solo CEDEARs (data912)">Precio actual (ARS)</th>
-                  <th title="Cuántos CEDEARs equivalen a 1 acción de la empresa en el exterior. Se autocompleta cuando es posible; si falta o quedó vieja, cargala a mano.">Ratio CEDEAR</th>
-                  <th title="CCL implícito de este CEDEAR puntual (precio CEDEAR × ratio ÷ precio real de la acción en USD). Puede diferir del CCL oficial.">CCL implícito</th>
                   <th>Valor actual (ARS)</th>
                   <th>Rendimiento (ARS)</th>
                   <th title="Con ratio conocido se calcula con el precio real de la acción en USD. Sin ratio, se aproxima con el CCL general (marcado con ≈).">Valor actual (USD)</th>
@@ -692,12 +690,10 @@ onUnmounted(() => {
               </thead>
               <tbody>
                 <tr v-for="p in openPositions" :key="p.ticker">
-                  <td class="ticker-cell">{{ p.ticker }}</td>
-                  <td>{{ formatNum(p.quantity) }}</td>
-                  <td>${{ formatMoney(p.avgCost) }}</td>
-                  <td>{{ p.livePrice != null ? `$${formatMoney(p.livePrice)}` : '—' }}</td>
-                  <td v-if="p.assetType === 'CEDEAR'">
-                    <div class="ratio-input-row">
+                  <td>
+                    <div class="ticker-cell">{{ p.ticker }}</div>
+                    <div v-if="p.assetType === 'CEDEAR'" class="ratio-subrow">
+                      <span>Ratio:</span>
                       <input
                         type="number" min="0" step="any"
                         :value="p.ratio ?? ''"
@@ -707,10 +703,14 @@ onUnmounted(() => {
                         title="Cantidad de CEDEARs por 1 acción"
                       >
                       <span v-if="p.ratio != null && cedearRatiosAuto[p.ticker] !== false" class="auto-tag">auto</span>
+                      <span v-if="p.impliedCCL != null" class="ratio-subrow-ccl" title="CCL implícito de este CEDEAR (puede diferir del CCL oficial)">
+                        · CCL impl. ${{ formatMoney(p.impliedCCL) }}
+                      </span>
                     </div>
                   </td>
-                  <td v-else>—</td>
-                  <td>{{ p.impliedCCL != null ? `$${formatMoney(p.impliedCCL)}` : '—' }}</td>
+                  <td>{{ formatNum(p.quantity) }}</td>
+                  <td>${{ formatMoney(p.avgCost) }}</td>
+                  <td>{{ p.livePrice != null ? `$${formatMoney(p.livePrice)}` : '—' }}</td>
                   <td>{{ p.marketValueARS != null ? `$${formatMoney(p.marketValueARS)}` : '—' }}</td>
                   <td v-if="p.unrealizedARS === null">—</td>
                   <td v-else :class="p.unrealizedARS >= 0 ? 'pl-pos' : 'pl-neg'">
@@ -741,7 +741,7 @@ onUnmounted(() => {
             Precio en vivo solo para CEDEARs (fuente: data912.com, cada 30s). Para acciones argentinas
             todavía no hay precio en vivo conectado acá. El valor y rendimiento en USD de los CEDEARs se
             calcula con el ratio real contra la acción subyacente (✓); si el ratio no está disponible
-            se aproxima con el CCL general (≈) — completalo a mano en "Ratio CEDEAR" para tener el número exacto.
+            se aproxima con el CCL general (≈) — completalo a mano debajo del ticker para tener el número exacto.
           </div>
         </div>
 
@@ -877,13 +877,14 @@ onUnmounted(() => {
   border: 1px solid var(--border);
   border-radius: 12px;
   width: 100%;
-  max-width: 1180px;
-  max-height: 92vh;
+  max-width: 1360px;
+  max-height: 95vh;
   overflow-y: auto;
-  padding: 20px;
+  padding: 28px 32px;
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 22px;
+  font-size: 14px;
 }
 
 .trades-header {
@@ -891,27 +892,27 @@ onUnmounted(() => {
   align-items: center;
   justify-content: space-between;
   border-bottom: 1px solid var(--border);
-  padding-bottom: 12px;
+  padding-bottom: 16px;
 }
 
 .trades-title {
-  font-size: 16px;
+  font-size: 19px;
   font-weight: 700;
   color: var(--text);
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
 }
 
 .close-btn {
   background: var(--bg);
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: 8px;
   color: var(--text-dim);
-  width: 28px;
-  height: 28px;
+  width: 34px;
+  height: 34px;
   cursor: pointer;
-  font-size: 14px;
+  font-size: 16px;
 }
 
 .close-btn:hover {
@@ -939,35 +940,35 @@ onUnmounted(() => {
 
 .summary-bar {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-  gap: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 14px;
 }
 
 .summary-card {
   background: var(--bg);
   border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 10px 12px;
+  border-radius: 10px;
+  padding: 14px 16px;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 6px;
 }
 
 .summary-label {
-  font-size: 10px;
+  font-size: 11px;
   color: var(--text-dim);
   text-transform: uppercase;
   letter-spacing: 0.5px;
 }
 
 .summary-card strong {
-  font-size: 16px;
+  font-size: 19px;
   color: var(--text);
   font-family: var(--font-num, inherit);
 }
 
 .section-title {
-  font-size: 11px;
+  font-size: 12.5px;
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.5px;
@@ -1059,18 +1060,18 @@ onUnmounted(() => {
 
 .view-tabs {
   display: flex;
-  gap: 8px;
+  gap: 10px;
   border-bottom: 1px solid var(--border);
-  padding-bottom: 12px;
+  padding-bottom: 16px;
 }
 
 .view-tab {
   background: var(--bg);
   border: 1px solid var(--border);
   color: var(--text-dim);
-  border-radius: 8px;
-  padding: 8px 14px;
-  font-size: 12px;
+  border-radius: 9px;
+  padding: 10px 16px;
+  font-size: 13px;
   font-weight: 700;
   cursor: pointer;
 }
@@ -1095,17 +1096,17 @@ onUnmounted(() => {
 .entry-cards {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 14px;
 }
 
 .entry-card {
   background: var(--bg);
   border: 1px solid var(--border);
   border-radius: 10px;
-  padding: 14px 16px;
+  padding: 18px 20px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 12px;
 }
 
 .entry-card-header {
@@ -1140,9 +1141,9 @@ onUnmounted(() => {
 
 .entry-card-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
-  gap: 10px;
-  padding: 10px 0;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 12px;
+  padding: 12px 0;
   border-top: 1px solid var(--border);
   border-bottom: 1px solid var(--border);
 }
@@ -1156,12 +1157,12 @@ onUnmounted(() => {
 .detail-item {
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: 4px;
   min-width: 0;
 }
 
 .detail-label {
-  font-size: 10px;
+  font-size: 10.5px;
   color: var(--text-dim);
   text-transform: uppercase;
   letter-spacing: 0.4px;
@@ -1169,7 +1170,7 @@ onUnmounted(() => {
 }
 
 .detail-value {
-  font-size: 12px;
+  font-size: 13px;
   color: var(--text);
   font-family: var(--font-num, inherit);
 }
@@ -1195,17 +1196,17 @@ onUnmounted(() => {
 .trades-table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 12px;
+  font-size: 13px;
 }
 
 .by-symbol-table th,
 .trades-table th {
   text-align: left;
-  padding: 8px 10px;
+  padding: 11px 14px;
   background: var(--bg);
   color: var(--text-dim);
   font-weight: 600;
-  font-size: 10px;
+  font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0.3px;
   border-bottom: 1px solid var(--border);
@@ -1214,7 +1215,7 @@ onUnmounted(() => {
 
 .by-symbol-table td,
 .trades-table td {
-  padding: 8px 10px;
+  padding: 11px 14px;
   border-bottom: 1px solid var(--border);
   color: var(--text);
   white-space: nowrap;
@@ -1323,23 +1324,23 @@ onUnmounted(() => {
 .trade-form {
   background: var(--bg);
   border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 14px;
+  border-radius: 10px;
+  padding: 18px 20px;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 16px;
 }
 
 .form-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-  gap: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 14px;
 }
 
 .form-field {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 5px;
   min-width: 0;
 }
 
@@ -1348,7 +1349,7 @@ onUnmounted(() => {
 }
 
 .form-field label {
-  font-size: 10px;
+  font-size: 11px;
   color: var(--text-dim);
   font-weight: 600;
   display: flex;
@@ -1377,20 +1378,28 @@ onUnmounted(() => {
   color: #fbbf24;
 }
 
-.ratio-input-row {
+.ratio-subrow {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 5px;
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.ratio-subrow-ccl {
+  color: var(--text-dim);
 }
 
 .ratio-input {
-  width: 56px;
+  width: 52px;
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 6px;
-  padding: 4px 6px;
+  padding: 3px 6px;
   color: var(--text);
-  font-size: 12px;
+  font-size: 11px;
   font-family: inherit;
 }
 
@@ -1404,9 +1413,9 @@ onUnmounted(() => {
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 6px;
-  padding: 6px 8px;
+  padding: 9px 10px;
   color: var(--text);
-  font-size: 12px;
+  font-size: 13px;
   font-family: inherit;
   min-width: 0;
 }
@@ -1419,17 +1428,17 @@ onUnmounted(() => {
 
 .form-actions {
   display: flex;
-  gap: 8px;
+  gap: 10px;
 }
 
 .btn-primary {
   background: #2563eb;
   border: 1px solid #2563eb;
   color: white;
-  border-radius: 6px;
-  padding: 8px 16px;
+  border-radius: 7px;
+  padding: 10px 18px;
   font-weight: 600;
-  font-size: 12px;
+  font-size: 13px;
   cursor: pointer;
 }
 
@@ -1446,10 +1455,10 @@ onUnmounted(() => {
   background: var(--panel);
   border: 1px solid var(--border);
   color: var(--text-dim);
-  border-radius: 6px;
-  padding: 8px 16px;
+  border-radius: 7px;
+  padding: 10px 18px;
   font-weight: 600;
-  font-size: 12px;
+  font-size: 13px;
   cursor: pointer;
 }
 
@@ -1466,6 +1475,7 @@ onUnmounted(() => {
     max-width: 100%;
     height: 100vh;
     border-radius: 0;
+    padding: 18px 16px;
   }
   .form-field-wide {
     grid-column: span 1;
