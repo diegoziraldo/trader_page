@@ -1,49 +1,60 @@
-// src/services/tradesService.js
-// Persiste la bitácora de operaciones (CEDEARs / acciones argentinas) en el
-// backend (Express + SQLite).
-
-const API_URL = import.meta.env.VITE_API_URL || '/api'
+const API_BASE = '/api/trades';
 
 export async function getTrades() {
-  const res = await fetch(`${API_URL}/trades`)
-  if (!res.ok) throw new Error('Error al obtener los trades')
-  return res.json()
+  const response = await fetch(API_BASE);
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw new Error(errorData.error || 'Error al cargar las operaciones');
+  }
+  return await response.json();
 }
 
 export async function getTradesSummary() {
-  const res = await fetch(`${API_URL}/trades/summary`)
-  if (!res.ok) throw new Error('Error al obtener el resumen de resultados')
-  return res.json()
+  const response = await fetch(`${API_BASE}/summary`);
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw new Error(errorData.error || 'Error al cargar el resumen de operaciones');
+  }
+  return await response.json();
 }
 
-// data: { date, assetType, ticker, operation, quantity, price, fee?, notes? }
-export async function createTrade(data) {
-  const res = await fetch(`${API_URL}/trades`, {
+export async function createTrade(payload) {
+  const response = await fetch(API_BASE, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(data),
-  })
-  if (!res.ok) {
-    const body = await res.json().catch(() => ({}))
-    throw new Error(body.error || 'Error al crear el trade')
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw new Error(errorData.error || 'Error al crear la operación');
   }
-  return res.json()
+  return await response.json();
 }
 
-export async function updateTrade(id, data) {
-  const res = await fetch(`${API_URL}/trades/${id}`, {
+export async function updateTrade(id, payload) {
+  const response = await fetch(`${API_BASE}/${id}`, {
     method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(data),
-  })
-  if (!res.ok) {
-    const body = await res.json().catch(() => ({}))
-    throw new Error(body.error || 'Error al actualizar el trade')
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw new Error(errorData.error || 'Error al actualizar la operación');
   }
-  return res.json()
+  return await response.json();
 }
 
 export async function deleteTrade(id) {
-  const res = await fetch(`${API_URL}/trades/${id}`, { method: 'DELETE' })
-  if (!res.ok && res.status !== 204) throw new Error('Error al eliminar el trade')
+  const response = await fetch(`${API_BASE}/${id}`, {
+    method: 'DELETE',
+  });
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw new Error(errorData.error || 'Error al eliminar la operación');
+  }
+  return await response.json();
 }

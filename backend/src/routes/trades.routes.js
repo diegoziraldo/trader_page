@@ -1,11 +1,13 @@
 const express = require('express');
 const router = express.Router();
-const controller = require('../controllers/trades.controller');
+const tradesController = require('../controllers/trades.controller');
 
-router.get('/summary', controller.getSummary);
-router.get('/', controller.getAll);
-router.post('/', controller.create);
-router.put('/:id', controller.update);
-router.delete('/:id', controller.remove);
+router.get('/', tradesController.getAllTrades);
+router.get('/summary', tradesController.getTradesSummary);
+router.post('/', tradesController.createTrade);
+router.put('/:id', tradesController.updateTrade);
+router.delete('/:id', tradesController.deleteTrade);
 
 module.exports = router;
+
+
