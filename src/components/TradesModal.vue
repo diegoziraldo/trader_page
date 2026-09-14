@@ -93,9 +93,36 @@ function formatDate(d) {
   return `${day}/${m}/${y}`
 }
 
+const searchQuery = ref('')
+const currentPage = ref(1)
+const PAGE_SIZE = 10
+
+const filteredTrades = computed(() => {
+  const q = searchQuery.value.trim().toUpperCase()
+  if (!q) return trades.value
+  return trades.value.filter((t) => t.ticker.toUpperCase().includes(q))
+})
+
 const sortedTrades = computed(() =>
-  [...trades.value].sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : b.id - a.id))
+  [...filteredTrades.value].sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : b.id - a.id))
 )
+
+// Paginación: 10 por página sobre el resultado ya buscado, así el buscador
+// siempre encuentra en TODO el historial, no solo en la página visible.
+const totalPages = computed(() => Math.max(1, Math.ceil(sortedTrades.value.length / PAGE_SIZE)))
+
+const paginatedTrades = computed(() => {
+  const start = (currentPage.value - 1) * PAGE_SIZE
+  return sortedTrades.value.slice(start, start + PAGE_SIZE)
+})
+
+function goToPage(p) {
+  currentPage.value = Math.min(Math.max(1, p), totalPages.value)
+}
+
+watch(searchQuery, () => {
+  currentPage.value = 1
+})
 
 // Posiciones abiertas con valor de mercado y rendimiento no realizado, en
 // ARS y en USD — como muestran los brokers en su panel de "cartera".
@@ -428,12 +455,25 @@ onUnmounted(() => {
         <!-- operación, sin formulario de por medio)                      -->
         <!-- ============================================================ -->
         <div v-if="viewMode === 'list'" class="full-detail-screen">
-          <div class="section-title">Todas las operaciones ({{ sortedTrades.length }})</div>
+          <div class="table-header-row">
+            <div class="section-title">Todas las operaciones ({{ filteredTrades.length }})</div>
+            <div class="search-box">
+              <input
+                type="text"
+                v-model="searchQuery"
+                placeholder="Buscar por ticker..."
+                style="text-transform:uppercase"
+              >
+              <button v-if="searchQuery" type="button" class="search-clear" @click="searchQuery = ''">✕</button>
+            </div>
+          </div>
 
-          <div v-if="!sortedTrades.length" class="empty-state">Todavía no cargaste ninguna operación.</div>
+          <div v-if="!sortedTrades.length" class="empty-state">
+            {{ searchQuery ? `No hay operaciones que coincidan con "${searchQuery}".` : 'Todavía no cargaste ninguna operación.' }}
+          </div>
 
           <div v-else class="entry-cards">
-            <div v-for="t in sortedTrades" :key="t.id" class="entry-card">
+            <div v-for="t in paginatedTrades" :key="t.id" class="entry-card">
               <div class="entry-card-header">
                 <div class="entry-card-title">
                   <span class="ticker-cell">{{ t.ticker }}</span>
@@ -482,6 +522,12 @@ onUnmounted(() => {
                 </div>
               </div>
             </div>
+          </div>
+
+          <div v-if="sortedTrades.length" class="pagination-bar">
+            <button type="button" class="page-btn" :disabled="currentPage === 1" @click="goToPage(currentPage - 1)">← Anterior</button>
+            <span class="page-info">Página {{ currentPage }} de {{ totalPages }} · mostrando {{ paginatedTrades.length }} de {{ sortedTrades.length }}</span>
+            <button type="button" class="page-btn" :disabled="currentPage === totalPages" @click="goToPage(currentPage + 1)">Siguiente →</button>
           </div>
         </div>
 
@@ -641,7 +687,18 @@ onUnmounted(() => {
         </form>
 
         <!-- Tabla de operaciones -->
-        <div class="section-title">Historial ({{ trades.length }})</div>
+        <div class="table-header-row">
+          <div class="section-title">Historial ({{ filteredTrades.length }})</div>
+          <div class="search-box">
+            <input
+              type="text"
+              v-model="searchQuery"
+              placeholder="Buscar por ticker..."
+              style="text-transform:uppercase"
+            >
+            <button v-if="searchQuery" type="button" class="search-clear" @click="searchQuery = ''">✕</button>
+          </div>
+        </div>
         <div class="trades-table-wrap">
           <table class="trades-table" v-if="sortedTrades.length">
             <thead>
@@ -661,7 +718,7 @@ onUnmounted(() => {
               </tr>
             </thead>
             <tbody>
-              <tr v-for="t in sortedTrades" :key="t.id" :class="{ 'row-editing': editingId === t.id }">
+              <tr v-for="t in paginatedTrades" :key="t.id" :class="{ 'row-editing': editingId === t.id }">
                 <td>{{ formatDate(t.date) }}</td>
                 <td><span class="badge" :class="t.assetType === 'CEDEAR' ? 'badge-cedear' : 'badge-ar'">{{ t.assetType === 'CEDEAR' ? 'CEDEAR' : 'Acción AR' }}</span></td>
                 <td class="ticker-cell">{{ t.ticker }}</td>
@@ -681,6 +738,12 @@ onUnmounted(() => {
             </tbody>
           </table>
           <div v-else class="empty-state">Todavía no cargaste ninguna operación.</div>
+        </div>
+
+        <div v-if="sortedTrades.length" class="pagination-bar">
+          <button type="button" class="page-btn" :disabled="currentPage === 1" @click="goToPage(currentPage - 1)">← Anterior</button>
+          <span class="page-info">Página {{ currentPage }} de {{ totalPages }} · mostrando {{ paginatedTrades.length }} de {{ sortedTrades.length }}</span>
+          <button type="button" class="page-btn" :disabled="currentPage === totalPages" @click="goToPage(currentPage + 1)">Siguiente →</button>
         </div>
         </template>
       </template>
@@ -800,6 +863,89 @@ onUnmounted(() => {
   text-transform: uppercase;
   letter-spacing: 0.5px;
   color: var(--text-dim);
+}
+
+.table-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.search-box {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex: 1;
+  min-width: 160px;
+  max-width: 260px;
+}
+
+.search-box input {
+  width: 100%;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 26px 6px 10px;
+  color: var(--text);
+  font-size: 12px;
+  font-family: inherit;
+}
+
+.search-box input:focus {
+  outline: none;
+  border-color: var(--blue, #2563eb);
+}
+
+.search-clear {
+  position: absolute;
+  right: 6px;
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 11px;
+  padding: 2px;
+}
+
+.search-clear:hover {
+  color: var(--text);
+}
+
+.pagination-bar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  padding-top: 4px;
+}
+
+.page-btn {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  border-radius: 6px;
+  padding: 6px 12px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.page-btn:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--text-dim);
+}
+
+.page-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.page-info {
+  font-size: 11px;
+  color: var(--text-dim);
+  white-space: nowrap;
 }
 
 .view-tabs {

@@ -1,5 +1,5 @@
 <script setup>
-import { ref, reactive, computed, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted, watch } from 'vue'
 import {
   getJournalEntries,
   getJournalSummary,
@@ -50,6 +50,9 @@ const loading = ref(true)
 const errorMsg = ref('')
 const saving = ref(false)
 const statusFilter = ref('TODAS')
+const searchQuery = ref('')
+const currentPage = ref(1)
+const PAGE_SIZE = 10
 
 const editingId = ref(null)
 const expandedId = ref(null) // id de la operación con el detalle desplegado (vista tabla)
@@ -130,8 +133,15 @@ function formatDays(entry) {
 }
 
 const filteredEntries = computed(() => {
-  if (statusFilter.value === 'TODAS') return entries.value
-  return entries.value.filter((e) => e.status === statusFilter.value)
+  let list = entries.value
+  if (statusFilter.value !== 'TODAS') {
+    list = list.filter((e) => e.status === statusFilter.value)
+  }
+  const q = searchQuery.value.trim().toUpperCase()
+  if (q) {
+    list = list.filter((e) => e.symbol.toUpperCase().includes(q))
+  }
+  return list
 })
 
 const sortedEntries = computed(() =>
@@ -139,6 +149,24 @@ const sortedEntries = computed(() =>
     a.entryDate < b.entryDate ? 1 : a.entryDate > b.entryDate ? -1 : b.id - a.id
   )
 )
+
+// Paginación: 10 por página sobre el resultado ya filtrado/buscado, así el
+// buscador siempre encuentra en TODO el historial, no solo en la página
+// visible.
+const totalPages = computed(() => Math.max(1, Math.ceil(sortedEntries.value.length / PAGE_SIZE)))
+
+const paginatedEntries = computed(() => {
+  const start = (currentPage.value - 1) * PAGE_SIZE
+  return sortedEntries.value.slice(start, start + PAGE_SIZE)
+})
+
+function goToPage(p) {
+  currentPage.value = Math.min(Math.max(1, p), totalPages.value)
+}
+
+watch([statusFilter, searchQuery], () => {
+  currentPage.value = 1
+})
 
 // Duración promedio de las operaciones ya cerradas (en días), para el
 // resumen general.
@@ -368,6 +396,15 @@ onMounted(() => {
         <div v-if="viewMode === 'list'" class="full-detail-screen">
           <div class="table-header-row">
             <div class="section-title">Todas las operaciones ({{ filteredEntries.length }})</div>
+            <div class="search-box">
+              <input
+                type="text"
+                v-model="searchQuery"
+                placeholder="Buscar por ticker..."
+                style="text-transform:uppercase"
+              >
+              <button v-if="searchQuery" type="button" class="search-clear" @click="searchQuery = ''">✕</button>
+            </div>
             <div class="status-filters">
               <button
                 v-for="f in ['TODAS', 'ABIERTO', 'CERRADO', 'CANCELADO']"
@@ -383,11 +420,11 @@ onMounted(() => {
           </div>
 
           <div v-if="!sortedEntries.length" class="empty-state">
-            Todavía no cargaste ninguna operación en la planilla.
+            {{ searchQuery ? `No hay operaciones que coincidan con "${searchQuery}".` : 'Todavía no cargaste ninguna operación en la planilla.' }}
           </div>
 
           <div v-else class="entry-cards">
-            <div v-for="e in sortedEntries" :key="e.id" class="entry-card">
+            <div v-for="e in paginatedEntries" :key="e.id" class="entry-card">
               <div class="entry-card-header">
                 <div class="entry-card-title">
                   <span class="ticker-cell">{{ e.symbol }}</span>
@@ -497,6 +534,12 @@ onMounted(() => {
                 </div>
               </div>
             </div>
+          </div>
+
+          <div v-if="sortedEntries.length" class="pagination-bar">
+            <button type="button" class="page-btn" :disabled="currentPage === 1" @click="goToPage(currentPage - 1)">← Anterior</button>
+            <span class="page-info">Página {{ currentPage }} de {{ totalPages }} · mostrando {{ paginatedEntries.length }} de {{ sortedEntries.length }}</span>
+            <button type="button" class="page-btn" :disabled="currentPage === totalPages" @click="goToPage(currentPage + 1)">Siguiente →</button>
           </div>
         </div>
 
@@ -639,6 +682,15 @@ onMounted(() => {
         <!-- Tabla de operaciones -->
         <div class="table-header-row">
           <div class="section-title">Historial ({{ filteredEntries.length }})</div>
+          <div class="search-box">
+            <input
+              type="text"
+              v-model="searchQuery"
+              placeholder="Buscar por ticker..."
+              style="text-transform:uppercase"
+            >
+            <button v-if="searchQuery" type="button" class="search-clear" @click="searchQuery = ''">✕</button>
+          </div>
           <div class="status-filters">
             <button
               v-for="f in ['TODAS', 'ABIERTO', 'CERRADO', 'CANCELADO']"
@@ -677,7 +729,7 @@ onMounted(() => {
               </tr>
             </thead>
             <tbody>
-              <template v-for="e in sortedEntries" :key="e.id">
+              <template v-for="e in paginatedEntries" :key="e.id">
                 <tr
                   class="entry-row"
                   :class="{ 'row-editing': editingId === e.id, 'row-expanded': expandedId === e.id }"
@@ -780,7 +832,15 @@ onMounted(() => {
               </template>
             </tbody>
           </table>
-          <div v-else class="empty-state">Todavía no cargaste ninguna operación en la planilla.</div>
+          <div v-else class="empty-state">
+            {{ searchQuery ? `No hay operaciones que coincidan con "${searchQuery}".` : 'Todavía no cargaste ninguna operación en la planilla.' }}
+          </div>
+        </div>
+
+        <div v-if="sortedEntries.length" class="pagination-bar">
+          <button type="button" class="page-btn" :disabled="currentPage === 1" @click="goToPage(currentPage - 1)">← Anterior</button>
+          <span class="page-info">Página {{ currentPage }} de {{ totalPages }} · mostrando {{ paginatedEntries.length }} de {{ sortedEntries.length }}</span>
+          <button type="button" class="page-btn" :disabled="currentPage === totalPages" @click="goToPage(currentPage + 1)">Siguiente →</button>
         </div>
         </template>
       </template>
@@ -1013,6 +1073,81 @@ onMounted(() => {
   justify-content: space-between;
   flex-wrap: wrap;
   gap: 8px;
+}
+
+.search-box {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex: 1;
+  min-width: 160px;
+  max-width: 260px;
+}
+
+.search-box input {
+  width: 100%;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 26px 6px 10px;
+  color: var(--text);
+  font-size: 12px;
+  font-family: inherit;
+}
+
+.search-box input:focus {
+  outline: none;
+  border-color: var(--blue, #2563eb);
+}
+
+.search-clear {
+  position: absolute;
+  right: 6px;
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 11px;
+  padding: 2px;
+}
+
+.search-clear:hover {
+  color: var(--text);
+}
+
+.pagination-bar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  padding-top: 4px;
+}
+
+.page-btn {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  border-radius: 6px;
+  padding: 6px 12px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.page-btn:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--text-dim);
+}
+
+.page-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.page-info {
+  font-size: 11px;
+  color: var(--text-dim);
+  white-space: nowrap;
 }
 
 .status-filters {
