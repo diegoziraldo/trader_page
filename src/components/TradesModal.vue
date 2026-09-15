@@ -5,66 +5,59 @@ import {
   getTradesSummary,
   createTrade,
   updateTrade,
-  deleteTrade,
+  deleteTrade
 } from '../services/tradesService'
 
 const emit = defineEmits(['close'])
 
-// =========================================================
-// CONFIGURACIÓN — mismas fuentes públicas que usa CclCalculator.vue
-// =========================================================
 const DOLARAPI_LIST_URL = 'https://dolarapi.com/v1/dolares'
-const CCL_REFRESH_MS = 60_000
-const CEDEARS_LIVE_URL = 'https://data912.com/live/arg_cedears'
-const CEDEARS_REFRESH_MS = 30_000
-// api.argentinadatos.com expone el CCL histórico día por día, así no hay
-// que tipearlo a mano para operaciones viejas.
-const HISTORICAL_CCL_BASE = 'https://api.argentinadatos.com/v1/cotizaciones/dolares/contadoconliqui'
+const CCL_REFRESH_MS = 60000
 
-// --- Precio en USD de la acción subyacente (mismo host que ya usamos para
-// CEDEARs, así evitamos depender de un tercero nuevo para esto) ---
+const CEDEARS_LIVE_URL = 'https://data912.com/live/arg_cedears'
+const CEDEARS_REFRESH_MS = 30000
+
+const HISTORICAL_CCL_BASE =
+  'https://api.argentinadatos.com/v1/cotizaciones/dolares/contadoconliqui'
+
 const USA_STOCKS_LIVE_URL = 'https://data912.com/live/usa_stocks'
 const USA_ADRS_LIVE_URL = 'https://data912.com/live/usa_adrs'
-const USA_PRICES_REFRESH_MS = 60_000
+const USA_PRICES_REFRESH_MS = 60000
 
-// --- Ratio CEDEAR / acción subyacente (cuántos CEDEARs equivalen a 1 ---
-// acción). Fuente pública, best-effort: si no está disponible o quedó
-// desactualizada, el usuario la corrige a mano y el cálculo se ajusta solo.
-const CEDEAR_RATIOS_URL = 'https://ferminrp.github.io/google-sheets-argento/api/cedears.json'
+const CEDEAR_RATIOS_URL =
+  'https://ferminrp.github.io/google-sheets-argento/api/cedears.json'
 
 const trades = ref([])
 const summary = ref({
   bySymbol: [],
   totals: {
-    realizedPL: 0, realizedPLUSD: 0, invested: 0, investedUSD: 0,
-    openPositions: 0, totalTrades: 0,
-  },
+    realizedPL: 0,
+    realizedPLUSD: 0,
+    invested: 0,
+    investedUSD: 0,
+    openPositions: 0,
+    totalTrades: 0
+  }
 })
-const loading = ref(true)
+
+const loading = ref(false)
 const errorMsg = ref('')
 const saving = ref(false)
 
-const editingId = ref(null) // null = modo "agregar", si no, id del trade en edición
-const viewMode = ref('form') // 'form' = cargar/editar, 'list' = ver todo el detalle
+const editingId = ref(null)
+const viewMode = ref('form')
 
-// --- Dólar CCL en vivo (para "hoy" y para valuar posiciones abiertas) ---
 const cclActual = ref(null)
-let intervaloCclActual = null
+const cclInterval = ref(null)
 
-// --- Precios de CEDEARs en vivo (data912) ---
 const liveCedears = ref([])
-let intervaloCedears = null
+const cedearInterval = ref(null)
 
-// --- Precio en USD de la acción subyacente (data912) ---
-const usaPrices = ref({}) // { TICKER: precioUSD }
-let intervaloUsaPrices = null
+const usaPrices = ref([])
+const usaPricesInterval = ref(null)
 
-// --- Ratio CEDEAR/acción. cedearRatiosAuto[ticker] === false significa que
-// el usuario lo corrigió a mano y no debe pisarse con el autocompletado. ---
-const cedearRatios = ref({})     // { TICKER: ratio numérico }
-const cedearRatiosAuto = reactive({}) // { TICKER: true | false }
+const cedearRatios = ref({})
+const cedearRatiosAuto = ref({})
 
-// --- Autocompletado del CCL en el formulario ---
 const cclLoading = ref(false)
 const cclIsAuto = ref(false)
 const cclMsg = ref('')
@@ -83,34 +76,50 @@ function emptyForm() {
     price: '',
     fee: '',
     ccl: '',
-    notes: '',
+    notes: ''
   }
 }
 
 const form = reactive(emptyForm())
-const formError = ref('')
 
-function formatMoney(n) {
-  if (n === null || n === undefined || n === '') return '—'
-  const num = Number(n) || 0
-  return num.toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+function formatMoney(value, decimals = 2) {
+  const n = Number(value)
+  if (!Number.isFinite(n)) return '-'
+
+  return n.toLocaleString('es-AR', {
+    minimumFractionDigits: decimals,
+    maximumFractionDigits: decimals
+  })
 }
 
-function formatNum(n, maxDigits = 4) {
-  if (n === null || n === undefined || n === '') return '—'
-  return Number(n).toLocaleString('es-AR', { maximumFractionDigits: maxDigits })
+function formatNum(value, decimals = 2) {
+  const n = Number(value)
+  if (!Number.isFinite(n)) return '-'
+
+  return n.toLocaleString('es-AR', {
+    minimumFractionDigits: decimals,
+    maximumFractionDigits: decimals
+  })
 }
 
-function formatPct(n) {
-  if (n === null || n === undefined) return '—'
-  const sign = n >= 0 ? '+' : ''
-  return `${sign}${n.toFixed(2)}%`
+function formatPct(value, decimals = 2) {
+  const n = Number(value)
+  if (!Number.isFinite(n)) return '-'
+
+  return `${n.toLocaleString('es-AR', {
+    minimumFractionDigits: decimals,
+    maximumFractionDigits: decimals
+  })}%`
 }
 
-function formatDate(d) {
-  if (!d) return '—'
-  const [y, m, day] = d.split('-')
-  return `${day}/${m}/${y}`
+function formatDate(value) {
+  if (!value) return '-'
+
+  const d = new Date(value + 'T00:00:00')
+
+  if (Number.isNaN(d.getTime())) return value
+
+  return d.toLocaleDateString('es-AR')
 }
 
 const searchQuery = ref('')
@@ -118,101 +127,162 @@ const currentPage = ref(1)
 const PAGE_SIZE = 10
 
 const filteredTrades = computed(() => {
-  const q = searchQuery.value.trim().toUpperCase()
+  const q = searchQuery.value.trim().toLowerCase()
+
   if (!q) return trades.value
-  return trades.value.filter((t) => t.ticker.toUpperCase().includes(q))
+
+  return trades.value.filter(trade => {
+    return [
+      trade.ticker,
+      trade.assetType,
+      trade.operation,
+      trade.notes,
+      trade.date
+    ]
+      .filter(Boolean)
+      .some(value => String(value).toLowerCase().includes(q))
+  })
 })
 
-const sortedTrades = computed(() =>
-  [...filteredTrades.value].sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : b.id - a.id))
-)
+const sortedTrades = computed(() => {
+  return [...filteredTrades.value].sort((a, b) => {
+    const dateA = new Date(a.date || 0).getTime()
+    const dateB = new Date(b.date || 0).getTime()
 
-// Paginación: 10 por página sobre el resultado ya buscado, así el buscador
-// siempre encuentra en TODO el historial, no solo en la página visible.
-const totalPages = computed(() => Math.max(1, Math.ceil(sortedTrades.value.length / PAGE_SIZE)))
+    if (dateA !== dateB) return dateB - dateA
+
+    return Number(b.id || 0) - Number(a.id || 0)
+  })
+})
+
+const totalPages = computed(() => {
+  return Math.max(1, Math.ceil(sortedTrades.value.length / PAGE_SIZE))
+})
 
 const paginatedTrades = computed(() => {
   const start = (currentPage.value - 1) * PAGE_SIZE
+
   return sortedTrades.value.slice(start, start + PAGE_SIZE)
 })
 
-function goToPage(p) {
-  currentPage.value = Math.min(Math.max(1, p), totalPages.value)
+function goToPage(page) {
+  const p = Math.min(Math.max(1, page), totalPages.value)
+  currentPage.value = p
 }
 
 watch(searchQuery, () => {
   currentPage.value = 1
 })
 
-// Posiciones abiertas con valor de mercado y rendimiento no realizado, en
-// ARS y en USD — como muestran los brokers en su panel de "cartera".
-const openPositions = computed(() =>
-  summary.value.bySymbol
-    .filter((s) => s.quantity > 0)
-    .map((s) => {
-      const isCedear = s.assetType === 'CEDEAR'
-      const livePrice = isCedear ? getLivePrice(s.ticker) : null
-      const marketValueARS = livePrice != null ? s.quantity * livePrice : null
-      const unrealizedARS = marketValueARS != null ? marketValueARS - s.invested : null
-      const unrealizedARSPct =
-        marketValueARS != null && s.invested > 0 ? (unrealizedARS / s.invested) * 100 : null
+watch(totalPages, value => {
+  if (currentPage.value > value) {
+    currentPage.value = value
+  }
+})
 
-      // --- Valuación en USD ---
-      // Para CEDEARs, el CCL "oficial" (dolarapi) puede diferir bastante del
-      // CCL implícito de cada CEDEAR en particular. Para no perder el precio
-      // real de ganancia/pérdida, valuamos directamente con la cantidad de
-      // acciones equivalentes (según el ratio) y el precio real de la acción
-      // en dólares (data912). Si falta el ratio o el precio subyacente,
-      // caemos de vuelta al CCL general como aproximación (marcada en la UI).
-      const ratio = isCedear ? getRatio(s.ticker) : null
-      const underlyingPriceUSD = isCedear ? getUnderlyingPriceUSD(s.ticker) : null
-      const usesRatioValuation = isCedear && ratio != null && underlyingPriceUSD != null
+const openPositions = computed(() => {
+  const rows = summary.value?.bySymbol || []
 
-      let marketValueUSD = null
-      if (usesRatioValuation) {
-        marketValueUSD = (s.quantity / ratio) * underlyingPriceUSD
-      } else if (marketValueARS != null && cclActual.value) {
-        marketValueUSD = marketValueARS / cclActual.value
+  return rows
+    .filter(row => Number(row.quantity || 0) > 0)
+    .map(row => {
+      const ticker = String(row.ticker || '').toUpperCase()
+      const quantity = Number(row.quantity || 0)
+      const avgCost = Number(row.avgCost || row.averageCost || 0)
+
+      const currentPriceARS =
+        getLivePrice(ticker) ??
+        Number(row.currentPrice || row.price || 0)
+
+      const marketValueARS = quantity * currentPriceARS
+      const investedARS = quantity * avgCost
+      const unrealizedARS = marketValueARS - investedARS
+
+      let currentValueUSD = 0
+      let unrealizedUSD = 0
+      let impliedCCL = null
+
+      if (row.assetType === 'CEDEAR') {
+        const ratio = getCedearRatio(ticker)
+        const underlyingUSD = getUnderlyingPriceUSD(ticker)
+
+        if (
+          ratio &&
+          Number.isFinite(ratio) &&
+          underlyingUSD &&
+          Number.isFinite(underlyingUSD)
+        ) {
+          currentValueUSD =
+            (quantity * underlyingUSD) / ratio
+
+          unrealizedUSD =
+            currentValueUSD -
+            (investedARS / (Number(form.ccl) || cclActual.value || 1))
+
+          if (underlyingUSD > 0) {
+            impliedCCL =
+              currentPriceARS * ratio / underlyingUSD
+          }
+        } else {
+          const ccl =
+            Number(form.ccl) ||
+            Number(cclActual.value) ||
+            1
+
+          currentValueUSD = marketValueARS / ccl
+          unrealizedUSD = unrealizedARS / ccl
+        }
+      } else {
+        const ccl =
+          Number(form.ccl) ||
+          Number(cclActual.value) ||
+          1
+
+        currentValueUSD = marketValueARS / ccl
+        unrealizedUSD = unrealizedARS / ccl
       }
-
-      // CCL implícito de este CEDEAR puntual, a modo informativo: cuánto
-      // "vale" el dólar si valuás por el precio real de la acción.
-      const impliedCCL =
-        usesRatioValuation && livePrice != null ? (livePrice * ratio) / underlyingPriceUSD : null
-
-      const unrealizedUSD =
-        marketValueUSD != null && !s.usdIncomplete && s.investedUSD != null
-          ? marketValueUSD - s.investedUSD
-          : null
-      const unrealizedUSDPct =
-        unrealizedUSD != null && s.investedUSD > 0 ? (unrealizedUSD / s.investedUSD) * 100 : null
 
       return {
-        ...s,
-        livePrice,
+        ...row,
+        ticker,
+        quantity,
+        avgCost,
+        currentPriceARS,
         marketValueARS,
         unrealizedARS,
-        unrealizedARSPct,
-        ratio,
-        underlyingPriceUSD,
-        usesRatioValuation,
-        impliedCCL,
-        marketValueUSD,
+        currentValueUSD,
         unrealizedUSD,
-        unrealizedUSDPct,
+        impliedCCL
       }
     })
-)
+})
 
 async function loadAll() {
   loading.value = true
   errorMsg.value = ''
+
   try {
-    const [t, s] = await Promise.all([getTrades(), getTradesSummary()])
-    trades.value = t
-    summary.value = s
-  } catch (e) {
-    errorMsg.value = e.message
+    const [tradesData, summaryData] = await Promise.all([
+      getTrades(),
+      getTradesSummary()
+    ])
+
+    trades.value = Array.isArray(tradesData) ? tradesData : []
+
+    summary.value = summaryData || {
+      bySymbol: [],
+      totals: {
+        realizedPL: 0,
+        realizedPLUSD: 0,
+        invested: 0,
+        investedUSD: 0,
+        openPositions: 0,
+        totalTrades: 0
+      }
+    }
+  } catch (error) {
+    console.error(error)
+    errorMsg.value = 'No se pudieron cargar los trades.'
   } finally {
     loading.value = false
   }
@@ -221,62 +291,117 @@ async function loadAll() {
 async function refreshSummary() {
   try {
     summary.value = await getTradesSummary()
-  } catch (e) {
-    console.error('Error refrescando el resumen', e)
+  } catch (error) {
+    console.error(error)
   }
 }
 
-// =========================================================
-// DÓLAR CCL — en vivo (dolarapi) e histórico (argentinadatos)
-// =========================================================
 async function fetchLiveCCL() {
-  const res = await fetch(DOLARAPI_LIST_URL)
-  if (!res.ok) throw new Error('No se pudo consultar dolarapi')
-  const lista = await res.json()
-  const ccl = lista.find((d) => d.casa === 'contadoconliqui')
-  return ccl && ccl.venta ? Number(ccl.venta) : null
+  cclLoading.value = true
+  cclMsg.value = ''
+
+  try {
+    const response = await fetch(DOLARAPI_LIST_URL)
+
+    if (!response.ok) {
+      throw new Error('Error obteniendo dólares')
+    }
+
+    const data = await response.json()
+
+    const ccl = Array.isArray(data)
+      ? data.find(item =>
+          String(item.nombre || item.casa || '')
+            .toLowerCase()
+            .includes('contado con liqui')
+        )
+      : null
+
+    if (!ccl) {
+      throw new Error('No se encontró CCL')
+    }
+
+    const value =
+      Number(ccl.venta) ||
+      Number(ccl.compra) ||
+      null
+
+    if (value) {
+      cclActual.value = value
+      cclIsAuto.value = true
+
+      if (!editingId.value && !form.ccl) {
+        form.ccl = value
+      }
+    }
+  } catch (error) {
+    console.error(error)
+    cclMsg.value = 'No se pudo actualizar el CCL.'
+  } finally {
+    cclLoading.value = false
+  }
 }
 
-async function fetchHistoricalCCL(dateStr) {
-  if (!dateStr) return null
-  const [y, m, d] = dateStr.split('-')
-  const res = await fetch(`${HISTORICAL_CCL_BASE}/${y}/${m}/${d}`)
-  if (!res.ok) return null // fin de semana / feriado / fecha sin dato
-  const data = await res.json()
-  const row = Array.isArray(data) ? data[0] : data
-  return row && row.venta ? Number(row.venta) : null
+async function fetchHistoricalCCL(date) {
+  if (!date) return null
+
+  try {
+    const response = await fetch(
+      `${HISTORICAL_CCL_BASE}/${date}`
+    )
+
+    if (!response.ok) return null
+
+    const data = await response.json()
+
+    if (typeof data === 'number') return data
+
+    if (Array.isArray(data) && data.length) {
+      return Number(
+        data[data.length - 1]?.valor ||
+        data[data.length - 1]?.venta ||
+        data[data.length - 1]?.value ||
+        0
+      ) || null
+    }
+
+    return Number(
+      data?.valor ||
+      data?.venta ||
+      data?.value ||
+      0
+    ) || null
+  } catch (error) {
+    console.error(error)
+    return null
+  }
 }
 
 async function refreshLiveCCL() {
-  try {
-    const value = await fetchLiveCCL()
-    if (value) cclActual.value = value
-  } catch (e) {
-    console.error('No se pudo actualizar el CCL en vivo', e)
-  }
+  await fetchLiveCCL()
 }
 
-// Autocompleta el campo CCL del formulario: usa el valor en vivo si la
-// fecha es hoy, o el histórico de argentinadatos si es una fecha pasada.
-// Si el usuario ya lo editó a mano, no lo pisa hasta que cambie la fecha.
 async function autofillCCL() {
-  if (!cclIsAuto.value) return
+  if (!form.date) return
+
   cclLoading.value = true
   cclMsg.value = ''
+
   try {
-    let value = null
+    const historical = await fetchHistoricalCCL(form.date)
+
+    if (historical) {
+      form.ccl = historical
+      cclIsAuto.value = true
+      cclMsg.value = 'CCL histórico cargado.'
+      return
+    }
+
     if (form.date === todayISO()) {
-      value = cclActual.value ?? (await fetchLiveCCL())
+      await fetchLiveCCL()
     } else {
-      value = await fetchHistoricalCCL(form.date)
+      cclMsg.value = 'No se encontró CCL histórico para esa fecha.'
     }
-    if (value) {
-      form.ccl = value
-    } else {
-      cclMsg.value = 'No hay cotización para esa fecha (fin de semana/feriado). Cargala a mano.'
-    }
-  } catch (e) {
-    cclMsg.value = 'No se pudo traer el CCL automáticamente. Cargalo a mano.'
   } finally {
     cclLoading.value = false
   }
@@ -287,202 +412,288 @@ function onCclManualInput() {
   cclMsg.value = ''
 }
 
-function refetchCCL() {
-  cclIsAuto.value = true
-  autofillCCL()
+async function refetchCCL() {
+  await autofillCCL()
 }
 
 watch(
   () => form.date,
-  () => {
-    cclIsAuto.value = true
-    autofillCCL()
+  async newDate => {
+    if (!newDate) return
+
+    if (!editingId.value) {
+      await autofillCCL()
+    }
   }
 )
 
-// =========================================================
-// PRECIOS DE CEDEARs EN VIVO (data912.com, sin API key)
-// =========================================================
 async function loadLiveCedears() {
   try {
-    const res = await fetch(CEDEARS_LIVE_URL)
-    if (!res.ok) throw new Error('Error consultando data912')
-    liveCedears.value = await res.json()
-  } catch (e) {
-    console.error('No se pudo cargar el precio en vivo de CEDEARs', e)
+    const response = await fetch(CEDEARS_LIVE_URL)
+
+    if (!response.ok) {
+      throw new Error('Error obteniendo CEDEARs')
+    }
+
+    const data = await response.json()
+
+    liveCedears.value = Array.isArray(data) ? data : []
+  } catch (error) {
+    console.error(error)
   }
 }
 
 function getLivePrice(ticker) {
-  const found = liveCedears.value.find((item) => String(item.symbol).toUpperCase() === ticker)
-  return found && found.c ? Number(found.c) : null
+  const symbol = String(ticker || '').toUpperCase()
+
+  const item = liveCedears.value.find(item => {
+    return String(
+      item.symbol ||
+      item.ticker ||
+      item.especie ||
+      item.name ||
+      ''
+    ).toUpperCase() === symbol
+  })
+
+  if (!item) return null
+
+  return (
+    Number(item.price) ||
+    Number(item.last) ||
+    Number(item.ultimo) ||
+    Number(item.px) ||
+    null
+  )
 }
 
-// =========================================================
-// PRECIO EN USD DE LA ACCIÓN SUBYACENTE (data912)
-// =========================================================
-async function loadUsaPrices() {
+async function loadUSAPrices() {
   try {
-    const [stocksRes, adrsRes] = await Promise.allSettled([
+    const [stocksResponse, adrsResponse] = await Promise.all([
       fetch(USA_STOCKS_LIVE_URL),
-      fetch(USA_ADRS_LIVE_URL),
+      fetch(USA_ADRS_LIVE_URL)
     ])
-    const merged = {}
-    for (const settled of [stocksRes, adrsRes]) {
-      if (settled.status !== 'fulfilled' || !settled.value.ok) continue
-      const list = await settled.value.json()
-      for (const item of list) {
-        const sym = String(item.symbol || '').toUpperCase()
-        const price = Number(item.c)
-        if (sym && price > 0) merged[sym] = price
-      }
-    }
-    usaPrices.value = merged
-  } catch (e) {
-    console.error('No se pudo cargar el precio en USD de las acciones subyacentes', e)
+
+    const stocks = stocksResponse.ok
+      ? await stocksResponse.json()
+      : []
+
+    const adrs = adrsResponse.ok
+      ? await adrsResponse.json()
+      : []
+
+    usaPrices.value = [
+      ...(Array.isArray(stocks) ? stocks : []),
+      ...(Array.isArray(adrs) ? adrs : [])
+    ]
+  } catch (error) {
+    console.error(error)
   }
 }
 
 function getUnderlyingPriceUSD(ticker) {
-  return usaPrices.value[ticker] ?? null
+  const symbol = String(ticker || '').toUpperCase()
+
+  const item = usaPrices.value.find(item => {
+    return String(
+      item.symbol ||
+      item.ticker ||
+      item.name ||
+      ''
+    ).toUpperCase() === symbol
+  })
+
+  if (!item) return null
+
+  return (
+    Number(item.price) ||
+    Number(item.last) ||
+    Number(item.ultimo) ||
+    Number(item.px) ||
+    null
+  )
 }
 
-// =========================================================
-// RATIO CEDEAR / ACCIÓN SUBYACENTE
-// =========================================================
-// Acepta tanto "20" (20 CEDEARs = 1 acción) como formato "20:1" o, para
-// ratios inversos, "1:2" (1 CEDEAR = 2 acciones).
-function parseRatio(raw) {
-  if (raw === null || raw === undefined) return null
-  const str = String(raw).trim()
-  if (!str) return null
-  if (str.includes(':')) {
-    const [a, b] = str.split(':').map(Number)
-    if (!a || !b) return null
-    return a / b
+function parseRatio(item) {
+  if (item == null) return null
+
+  if (typeof item === 'number') {
+    return Number.isFinite(item) ? item : null
   }
-  const n = Number(str)
-  return n > 0 ? n : null
+
+  if (typeof item === 'string') {
+    const value = Number(
+      item
+        .replace(',', '.')
+        .replace(/[^0-9.-]/g, '')
+    )
+
+    return Number.isFinite(value) ? value : null
+  }
+
+  if (typeof item === 'object') {
+    return (
+      parseRatio(item.ratio) ||
+      parseRatio(item.ratioCedear) ||
+      parseRatio(item.ratio_cedear) ||
+      parseRatio(item.value) ||
+      parseRatio(item.valor) ||
+      null
+    )
+  }
+
+  return null
 }
 
 async function loadCedearRatios() {
   try {
-    const res = await fetch(CEDEAR_RATIOS_URL)
-    if (!res.ok) throw new Error('No se pudo consultar la fuente de ratios')
-    const data = await res.json()
-    const items = Array.isArray(data) ? data : data.items || []
-    for (const item of items) {
-      const ticker = String(item.Cedears || item.ticker || '').toUpperCase()
-      const ratio = parseRatio(item.Ratio ?? item.ratio)
-      if (!ticker || !ratio) continue
-      // No pisamos un ratio que el usuario ya haya corregido a mano.
-      if (cedearRatiosAuto[ticker] === false) continue
-      cedearRatios.value[ticker] = ratio
-      cedearRatiosAuto[ticker] = true
+    const response = await fetch(CEDEAR_RATIOS_URL)
+
+    if (!response.ok) {
+      throw new Error('Error obteniendo ratios')
     }
-  } catch (e) {
-    // No es crítico: si falla, cada CEDEAR se puede cargar a mano.
-    console.error('No se pudo cargar la tabla de ratios de CEDEARs', e)
+
+    const data = await response.json()
+
+    const result = {}
+
+    if (Array.isArray(data)) {
+      data.forEach(item => {
+        const ticker = String(
+          item.ticker ||
+          item.symbol ||
+          item.especie ||
+          item.nombre ||
+          ''
+        ).toUpperCase()
+
+        const ratio = parseRatio(item)
+
+        if (ticker && ratio) {
+          result[ticker] = ratio
+        }
+      })
+    } else if (data && typeof data === 'object') {
+      Object.entries(data).forEach(([ticker, value]) => {
+        const ratio = parseRatio(value)
+
+        if (ratio) {
+          result[String(ticker).toUpperCase()] = ratio
+        }
+      })
+    }
+
+    cedearRatios.value = result
+    cedearRatiosAuto.value = { ...result }
+  } catch (error) {
+    console.error(error)
   }
 }
 
-function getRatio(ticker) {
-  return cedearRatios.value[ticker] ?? null
+function getCedearRatio(ticker) {
+  const symbol = String(ticker || '').toUpperCase()
+
+  return (
+    Number(cedearRatios.value[symbol]) ||
+    Number(cedearRatiosAuto.value[symbol]) ||
+    null
+  )
 }
 
-// Permite al usuario corregir el ratio a mano (por ticker faltante o
-// desactualizado). Queda marcado como "manual" para no perderlo si
-// después se refresca la tabla automática.
-function setManualRatio(ticker, rawValue) {
-  const n = Number(rawValue)
-  if (n > 0) {
-    cedearRatios.value = { ...cedearRatios.value, [ticker]: n }
+function setManualRatio(ticker, value) {
+  const symbol = String(ticker || '').toUpperCase()
+  const ratio = Number(value)
+
+  if (!symbol) return
+
+  if (Number.isFinite(ratio) && ratio > 0) {
+    cedearRatios.value[symbol] = ratio
   } else {
-    const { [ticker]: _omit, ...rest } = cedearRatios.value
-    cedearRatios.value = rest
+    cedearRatios.value[symbol] =
+      cedearRatiosAuto.value[symbol] || null
   }
-  cedearRatiosAuto[ticker] = false
 }
 
-// =========================================================
-// FORMULARIO
-// =========================================================
 function startEdit(trade) {
   editingId.value = trade.id
+
+  Object.assign(form, {
+    date: trade.date || todayISO(),
+    assetType: trade.assetType || 'CEDEAR',
+    ticker: trade.ticker || '',
+    operation: trade.operation || 'COMPRA',
+    quantity: trade.quantity ?? '',
+    price: trade.price ?? '',
+    fee: trade.fee ?? '',
+    ccl: trade.ccl ?? '',
+    notes: trade.notes || ''
+  })
+
   viewMode.value = 'form'
-  form.date = trade.date
-  form.assetType = trade.assetType
-  form.ticker = trade.ticker
-  form.operation = trade.operation
-  form.quantity = trade.quantity
-  form.price = trade.price
-  form.fee = trade.fee
-  form.ccl = trade.ccl ?? ''
-  form.notes = trade.notes
-  // Al editar no pisamos el CCL ya cargado; si cambian la fecha, ahí sí
-  // se vuelve a buscar automáticamente.
-  cclIsAuto.value = false
-  cclMsg.value = ''
-  formError.value = ''
 }
 
 function cancelEdit() {
   editingId.value = null
   Object.assign(form, emptyForm())
-  formError.value = ''
-  cclMsg.value = ''
-  cclIsAuto.value = true
-  autofillCCL()
+
+  if (cclActual.value) {
+    form.ccl = cclActual.value
+  }
 }
 
 async function submitForm() {
-  formError.value = ''
-  const ticker = form.ticker.trim().toUpperCase()
-  if (!ticker) return (formError.value = 'Ingresá un ticker')
-  if (!(Number(form.quantity) > 0)) return (formError.value = 'La cantidad debe ser mayor a 0')
-  if (!(Number(form.price) > 0)) return (formError.value = 'El precio debe ser mayor a 0')
-
-  const payload = {
-    date: form.date,
-    assetType: form.assetType,
-    ticker,
-    operation: form.operation,
-    quantity: Number(form.quantity),
-    price: Number(form.price),
-    fee: Number(form.fee) || 0,
-    ccl: form.ccl === '' ? null : Number(form.ccl),
-    notes: form.notes.trim(),
-  }
+  if (saving.value) return
 
   saving.value = true
+  errorMsg.value = ''
+
   try {
-    if (editingId.value) {
-      const updated = await updateTrade(editingId.value, payload)
-      const idx = trades.value.findIndex((t) => t.id === editingId.value)
-      if (idx !== -1) trades.value[idx] = updated
-    } else {
-      const created = await createTrade(payload)
-      trades.value.push(created)
+    const payload = {
+      date: form.date,
+      assetType: form.assetType,
+      ticker: String(form.ticker || '').toUpperCase().trim(),
+      operation: form.operation,
+      quantity: Number(form.quantity),
+      price: Number(form.price),
+      fee: Number(form.fee || 0),
+      ccl: Number(form.ccl || 0),
+      notes: form.notes
     }
+
+    if (editingId.value) {
+      await updateTrade(editingId.value, payload)
+    } else {
+      await createTrade(payload)
+    }
+
     cancelEdit()
-    await refreshSummary()
-  } catch (e) {
-    formError.value = e.message
+    await loadAll()
+  } catch (error) {
+    console.error(error)
+    errorMsg.value =
+      error?.message ||
+      'No se pudo guardar el trade.'
   } finally {
     saving.value = false
   }
 }
 
-async function removeTrade(trade) {
-  const ok = window.confirm(`¿Borrar la operación de ${trade.ticker} del ${formatDate(trade.date)}?`)
-  if (!ok) return
+async function removeTrade(id) {
+  if (!confirm('¿Querés eliminar este trade?')) return
+
   try {
-    await deleteTrade(trade.id)
-    trades.value = trades.value.filter((t) => t.id !== trade.id)
-    if (editingId.value === trade.id) cancelEdit()
-    await refreshSummary()
-  } catch (e) {
-    errorMsg.value = e.message
+    await deleteTrade(id)
+
+    if (editingId.value === id) {
+      cancelEdit()
+    }
+
+    await loadAll()
+  } catch (error) {
+    console.error(error)
+    errorMsg.value =
+      error?.message ||
+      'No se pudo eliminar el trade.'
   }
 }
 
@@ -490,795 +701,1454 @@ function close() {
   emit('close')
 }
 
-function onOverlayClick(e) {
-  if (e.target === e.currentTarget) close()
+function onOverlayClick(event) {
+  if (event.target === event.currentTarget) {
+    close()
+  }
 }
 
-onMounted(() => {
-  loadAll()
+onMounted(async () => {
+  await loadAll()
 
-  refreshLiveCCL()
-  intervaloCclActual = setInterval(refreshLiveCCL, CCL_REFRESH_MS)
+  await Promise.all([
+    fetchLiveCCL(),
+    loadLiveCedears(),
+    loadUSAPrices(),
+    loadCedearRatios()
+  ])
 
-  loadLiveCedears()
-  intervaloCedears = setInterval(loadLiveCedears, CEDEARS_REFRESH_MS)
+  cclInterval.value = setInterval(
+    refreshLiveCCL,
+    CCL_REFRESH_MS
+  )
 
-  loadUsaPrices()
-  intervaloUsaPrices = setInterval(loadUsaPrices, USA_PRICES_REFRESH_MS)
+  cedearInterval.value = setInterval(
+    loadLiveCedears,
+    CEDEARS_REFRESH_MS
+  )
 
-  // Los ratios casi no cambian en el día a día, alcanza con cargarlos una vez.
-  loadCedearRatios()
-
-  // Primer autocompletado del CCL para el formulario "hoy" en blanco.
-  cclIsAuto.value = true
-  autofillCCL()
+  usaPricesInterval.value = setInterval(
+    loadUSAPrices,
+    USA_PRICES_REFRESH_MS
+  )
 })
 
 onUnmounted(() => {
-  if (intervaloCclActual) clearInterval(intervaloCclActual)
-  if (intervaloCedears) clearInterval(intervaloCedears)
-  if (intervaloUsaPrices) clearInterval(intervaloUsaPrices)
+  if (cclInterval.value) {
+    clearInterval(cclInterval.value)
+  }
+
+  if (cedearInterval.value) {
+    clearInterval(cedearInterval.value)
+  }
+
+  if (usaPricesInterval.value) {
+    clearInterval(usaPricesInterval.value)
+  }
 })
 </script>
 
 <template>
-  <div class="trades-overlay" @click="onOverlayClick">
+  <div
+    class="trades-overlay"
+    @click="onOverlayClick"
+  >
     <div class="trades-modal">
-      <div class="trades-header">
+
+      <!-- HEADER -->
+      <header class="trades-header">
         <div class="trades-title">
-          <span class="trades-icon">📒</span>
-          Bitácora de Trades
+          <span>📒</span>
+          <span>Bitácora de Trades</span>
         </div>
-        <button class="close-btn" @click="close" title="Cerrar">✕</button>
+
+        <button
+          class="close-btn"
+          type="button"
+          aria-label="Cerrar"
+          @click="close"
+        >
+          ✕
+        </button>
+      </header>
+
+      <!-- LOADING -->
+      <div
+        v-if="loading"
+        class="loading"
+      >
+        Cargando operaciones...
       </div>
 
-      <div v-if="loading" class="trades-loading">Cargando bitácora...</div>
+      <!-- ERROR -->
+      <div
+        v-if="errorMsg"
+        class="error-msg"
+      >
+        {{ errorMsg }}
+      </div>
 
+      <!-- SUMMARY -->
+      <section class="summary-bar">
+
+        <div class="summary-card">
+          <span class="summary-label">
+            Resultado realizado ARS
+          </span>
+
+          <strong
+            :class="{
+              'pl-pos':
+                Number(summary.totals?.realizedPL) > 0,
+              'pl-neg':
+                Number(summary.totals?.realizedPL) < 0
+            }"
+          >
+            $ {{ formatMoney(summary.totals?.realizedPL || 0) }}
+          </strong>
+        </div>
+
+        <div class="summary-card">
+          <span class="summary-label">
+            Resultado realizado USD
+          </span>
+
+          <strong
+            :class="{
+              'pl-pos':
+                Number(summary.totals?.realizedPLUSD) > 0,
+              'pl-neg':
+                Number(summary.totals?.realizedPLUSD) < 0
+            }"
+          >
+            USD {{ formatMoney(summary.totals?.realizedPLUSD || 0) }}
+          </strong>
+        </div>
+
+        <div class="summary-card">
+          <span class="summary-label">
+            Capital invertido
+          </span>
+
+          <strong>
+            $ {{ formatMoney(summary.totals?.invested || 0) }}
+          </strong>
+        </div>
+
+        <div class="summary-card">
+          <span class="summary-label">
+            Posiciones abiertas
+          </span>
+
+          <strong>
+            {{ summary.totals?.openPositions || 0 }}
+          </strong>
+        </div>
+
+        <div class="summary-card">
+          <span class="summary-label">
+            Total de operaciones
+          </span>
+
+          <strong>
+            {{ summary.totals?.totalTrades || trades.length }}
+          </strong>
+        </div>
+
+        <div class="summary-card">
+          <span class="summary-label">
+            CCL actual
+          </span>
+
+          <strong>
+            $
+            {{ cclActual ? formatMoney(cclActual) : '-' }}
+          </strong>
+        </div>
+
+      </section>
+
+      <!-- TABS -->
+      <div class="view-tabs">
+
+        <button
+          type="button"
+          class="view-tab"
+          :class="{ active: viewMode === 'form' }"
+          @click="viewMode = 'form'"
+        >
+          📝 Cargar / Editar
+        </button>
+
+        <button
+          type="button"
+          class="view-tab"
+          :class="{ active: viewMode === 'list' }"
+          @click="viewMode = 'list'"
+        >
+          📋 Ver todo el detalle ({{ trades.length }})
+        </button>
+
+      </div>
+
+      <!-- =====================================================
+           LIST VIEW
+           ===================================================== -->
+      <section
+        v-if="viewMode === 'list'"
+        class="full-detail-screen"
+      >
+
+        <div class="table-header-row">
+          <h3 class="section-title">
+            Historial completo de operaciones
+          </h3>
+
+          <input
+            v-model="searchQuery"
+            type="search"
+            class="search-input"
+            placeholder="Buscar ticker, operación..."
+          >
+        </div>
+
+        <div
+          v-if="!paginatedTrades.length"
+          class="empty-state"
+        >
+          No hay operaciones que coincidan con la búsqueda.
+        </div>
+
+        <div
+          v-else
+          class="entry-cards"
+        >
+
+          <article
+            v-for="trade in paginatedTrades"
+            :key="trade.id"
+            class="entry-card"
+          >
+
+            <div class="entry-card-header">
+
+              <div class="entry-card-ticker">
+
+                <strong>
+                  {{ trade.ticker }}
+                </strong>
+
+                <span class="badge">
+                  {{ trade.assetType }}
+                </span>
+
+                <span
+                  class="badge"
+                  :class="
+                    trade.operation === 'COMPRA'
+                      ? 'badge-compra'
+                      : 'badge-venta'
+                  "
+                >
+                  {{ trade.operation }}
+                </span>
+
+              </div>
+
+              <div class="entry-card-actions">
+
+                <button
+                  type="button"
+                  class="icon-btn"
+                  title="Editar"
+                  @click="startEdit(trade)"
+                >
+                  ✎
+                </button>
+
+                <button
+                  type="button"
+                  class="icon-btn icon-btn-danger"
+                  title="Eliminar"
+                  @click="removeTrade(trade.id)"
+                >
+                  🗑
+                </button>
+
+              </div>
+
+            </div>
+
+            <div class="entry-card-grid">
+
+              <div class="detail-item">
+                <label>Fecha</label>
+                <strong>
+                  {{ formatDate(trade.date) }}
+                </strong>
+              </div>
+
+              <div class="detail-item">
+                <label>Cantidad</label>
+                <strong>
+                  {{ formatNum(trade.quantity, 4) }}
+                </strong>
+              </div>
+
+              <div class="detail-item">
+                <label>Precio unitario</label>
+                <strong>
+                  $ {{ formatMoney(trade.price) }}
+                </strong>
+              </div>
+
+              <div class="detail-item">
+                <label>CCL</label>
+                <strong>
+                  $
+                  {{
+                    trade.ccl
+                      ? formatMoney(trade.ccl)
+                      : '-'
+                  }}
+                </strong>
+              </div>
+
+              <div class="detail-item">
+                <label>Precio USD</label>
+                <strong>
+                  USD
+                  {{
+                    trade.ccl && trade.price
+                      ? formatMoney(
+                          Number(trade.price) /
+                            Number(trade.ccl)
+                        )
+                      : '-'
+                  }}
+                </strong>
+              </div>
+
+              <div class="detail-item">
+                <label>Comisión</label>
+                <strong>
+                  $ {{ formatMoney(trade.fee || 0) }}
+                </strong>
+              </div>
+
+              <div class="detail-item">
+                <label>Total</label>
+                <strong>
+                  $
+                  {{
+                    formatMoney(
+                      Number(trade.quantity || 0) *
+                        Number(trade.price || 0) +
+                        Number(trade.fee || 0)
+                    )
+                  }}
+                </strong>
+              </div>
+
+            </div>
+
+            <div
+              v-if="trade.notes"
+              class="entry-card-notes"
+            >
+              <span>Notas</span>
+              <strong>{{ trade.notes }}</strong>
+            </div>
+
+          </article>
+
+        </div>
+
+        <div
+          v-if="totalPages > 1"
+          class="pagination"
+        >
+
+          <button
+            type="button"
+            :disabled="currentPage === 1"
+            @click="goToPage(currentPage - 1)"
+          >
+            ‹
+          </button>
+
+          <button
+            v-for="page in totalPages"
+            :key="page"
+            type="button"
+            :class="{ active: page === currentPage }"
+            @click="goToPage(page)"
+          >
+            {{ page }}
+          </button>
+
+          <button
+            type="button"
+            :disabled="currentPage === totalPages"
+            @click="goToPage(currentPage + 1)"
+          >
+            ›
+          </button>
+
+        </div>
+
+      </section>
+
+      <!-- =====================================================
+           FORM VIEW
+           ===================================================== -->
       <template v-else>
-        <div v-if="errorMsg" class="trades-error">{{ errorMsg }}</div>
 
-        <!-- Resumen general -->
-        <div class="summary-bar">
-          <div class="summary-card">
-            <span class="summary-label">Resultado realizado (ARS)</span>
-            <strong :class="summary.totals.realizedPL >= 0 ? 'pl-pos' : 'pl-neg'">
-              {{ summary.totals.realizedPL >= 0 ? '+' : '' }}${{ formatMoney(summary.totals.realizedPL) }}
-            </strong>
-          </div>
-          <div class="summary-card">
-            <span class="summary-label">Resultado realizado (USD)</span>
-            <strong :class="summary.totals.realizedPLUSD >= 0 ? 'pl-pos' : 'pl-neg'">
-              {{ summary.totals.realizedPLUSD >= 0 ? '+' : '' }}US${{ formatMoney(summary.totals.realizedPLUSD) }}
-            </strong>
-          </div>
-          <div class="summary-card">
-            <span class="summary-label">Invertido (posiciones abiertas)</span>
-            <strong>${{ formatMoney(summary.totals.invested) }}</strong>
-          </div>
-          <div class="summary-card">
-            <span class="summary-label">Posiciones abiertas</span>
-            <strong>{{ summary.totals.openPositions }}</strong>
-          </div>
-          <div class="summary-card">
-            <span class="summary-label">Operaciones cargadas</span>
-            <strong>{{ summary.totals.totalTrades }}</strong>
-          </div>
-          <div class="summary-card">
-            <span class="summary-label">CCL actual (referencia)</span>
-            <strong>{{ cclActual ? `$${formatMoney(cclActual)}` : '—' }}</strong>
-          </div>
-        </div>
+        <!-- OPEN POSITIONS -->
+        <section
+          v-if="openPositions.length"
+          class="by-symbol-section"
+        >
 
-        <!-- Selector de pantalla: cargar/editar vs. ver todo el detalle -->
-        <div class="view-tabs">
-          <button
-            type="button"
-            class="view-tab"
-            :class="{ active: viewMode === 'form' }"
-            @click="viewMode = 'form'"
-          >
-            📝 Cargar / Editar
-          </button>
-          <button
-            type="button"
-            class="view-tab"
-            :class="{ active: viewMode === 'list' }"
-            @click="viewMode = 'list'"
-          >
-            📋 Ver todo el detalle ({{ trades.length }})
-          </button>
-        </div>
-
-        <!-- ============================================================ -->
-        <!-- PANTALLA: VER TODO EL DETALLE (solo lectura, una tarjeta por  -->
-        <!-- operación, sin formulario de por medio)                      -->
-        <!-- ============================================================ -->
-        <div v-if="viewMode === 'list'" class="full-detail-screen">
           <div class="table-header-row">
-            <div class="section-title">Todas las operaciones ({{ filteredTrades.length }})</div>
-            <div class="search-box">
-              <input
-                type="text"
-                v-model="searchQuery"
-                placeholder="Buscar por ticker..."
-                style="text-transform:uppercase"
-              >
-              <button v-if="searchQuery" type="button" class="search-clear" @click="searchQuery = ''">✕</button>
-            </div>
+            <h3 class="section-title">
+              Posiciones abiertas
+            </h3>
           </div>
 
-          <div v-if="!sortedTrades.length" class="empty-state">
-            {{ searchQuery ? `No hay operaciones que coincidan con "${searchQuery}".` : 'Todavía no cargaste ninguna operación.' }}
-          </div>
-
-          <div v-else class="entry-cards">
-            <div v-for="t in paginatedTrades" :key="t.id" class="entry-card">
-              <div class="entry-card-header">
-                <div class="entry-card-title">
-                  <span class="ticker-cell">{{ t.ticker }}</span>
-                  <span class="badge" :class="t.assetType === 'CEDEAR' ? 'badge-cedear' : 'badge-ar'">{{ t.assetType === 'CEDEAR' ? 'CEDEAR' : 'Acción AR' }}</span>
-                  <span class="badge" :class="t.operation === 'COMPRA' ? 'badge-buy' : 'badge-sell'">{{ t.operation === 'COMPRA' ? 'Compra' : 'Venta' }}</span>
-                </div>
-                <div class="entry-card-actions">
-                  <button class="icon-btn" title="Editar" @click="startEdit(t)">✎</button>
-                  <button class="icon-btn icon-btn-danger" title="Eliminar" @click="removeTrade(t)">🗑</button>
-                </div>
-              </div>
-
-              <div class="entry-card-dates">{{ formatDate(t.date) }}</div>
-
-              <div class="entry-card-grid">
-                <div class="detail-item">
-                  <span class="detail-label">Cantidad</span>
-                  <span class="detail-value">{{ formatNum(t.quantity) }}</span>
-                </div>
-                <div class="detail-item">
-                  <span class="detail-label">Precio (ARS)</span>
-                  <span class="detail-value">${{ formatMoney(t.price) }}</span>
-                </div>
-                <div class="detail-item">
-                  <span class="detail-label">CCL del día</span>
-                  <span class="detail-value">{{ t.ccl ? `$${formatMoney(t.ccl)}` : '—' }}</span>
-                </div>
-                <div class="detail-item">
-                  <span class="detail-label">Precio (USD)</span>
-                  <span class="detail-value">{{ t.priceUSD != null ? `US$${formatMoney(t.priceUSD)}` : '—' }}</span>
-                </div>
-                <div class="detail-item">
-                  <span class="detail-label">Comisión</span>
-                  <span class="detail-value">${{ formatMoney(t.fee) }}</span>
-                </div>
-                <div class="detail-item">
-                  <span class="detail-label">Total operación</span>
-                  <span class="detail-value">${{ formatMoney(t.total) }}</span>
-                </div>
-              </div>
-
-              <div class="entry-card-notes">
-                <div class="detail-item">
-                  <span class="detail-label">Notas</span>
-                  <p class="detail-text">{{ t.notes || 'Sin notas cargadas.' }}</p>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <div v-if="sortedTrades.length" class="pagination-bar">
-            <button type="button" class="page-btn" :disabled="currentPage === 1" @click="goToPage(currentPage - 1)">← Anterior</button>
-            <span class="page-info">Página {{ currentPage }} de {{ totalPages }} · mostrando {{ paginatedTrades.length }} de {{ sortedTrades.length }}</span>
-            <button type="button" class="page-btn" :disabled="currentPage === totalPages" @click="goToPage(currentPage + 1)">Siguiente →</button>
-          </div>
-        </div>
-
-        <template v-if="viewMode === 'form'">
-        <!-- Posiciones abiertas: valor de mercado y rendimiento no realizado -->
-        <div v-if="openPositions.length" class="by-symbol-section">
-          <div class="section-title">Posiciones abiertas — valor de mercado</div>
           <div class="by-symbol-table-wrap">
-            <table class="by-symbol-table">
+
+            <table class="by-symbol-table positions-table">
+
               <thead>
                 <tr>
                   <th>Ticker</th>
                   <th>Cantidad</th>
-                  <th>Costo prom. (ARS)</th>
-                  <th title="Precio en vivo, solo CEDEARs (data912)">Precio actual (ARS)</th>
-                  <th>Valor actual (ARS)</th>
-                  <th>Rendimiento (ARS)</th>
-                  <th title="Con ratio conocido se calcula con el precio real de la acción en USD. Sin ratio, se aproxima con el CCL general (marcado con ≈).">Valor actual (USD)</th>
-                  <th title="Con ratio conocido se calcula con el precio real de la acción en USD. Sin ratio, se aproxima con el CCL general (marcado con ≈).">Rendimiento (USD)</th>
+                  <th>Costo prom. ARS</th>
+                  <th>Precio actual ARS</th>
+                  <th>Valor actual ARS</th>
+                  <th>Rendimiento ARS</th>
+                  <th>Valor actual USD</th>
+                  <th>Rendimiento USD</th>
                 </tr>
               </thead>
+
               <tbody>
-                <tr v-for="p in openPositions" :key="p.ticker">
-                  <td>
-                    <div class="ticker-cell">{{ p.ticker }}</div>
-                    <div v-if="p.assetType === 'CEDEAR'" class="ratio-subrow">
-                      <span>Ratio:</span>
-                      <input
-                        type="number" min="0" step="any"
-                        :value="p.ratio ?? ''"
-                        @change="setManualRatio(p.ticker, $event.target.value)"
-                        placeholder="ej: 10"
-                        class="ratio-input"
-                        title="Cantidad de CEDEARs por 1 acción"
-                      >
-                      <span v-if="p.ratio != null && cedearRatiosAuto[p.ticker] !== false" class="auto-tag">auto</span>
-                      <span v-if="p.impliedCCL != null" class="ratio-subrow-ccl" title="CCL implícito de este CEDEAR (puede diferir del CCL oficial)">
-                        · CCL impl. ${{ formatMoney(p.impliedCCL) }}
+
+                <tr
+                  v-for="position in openPositions"
+                  :key="position.ticker"
+                >
+
+                  <td class="ticker-cell">
+
+                    <div>
+                      <span>
+                        {{ position.ticker }}
+                      </span>
+
+                      <span class="badge">
+                        {{ position.assetType }}
                       </span>
                     </div>
-                  </td>
-                  <td>{{ formatNum(p.quantity) }}</td>
-                  <td>${{ formatMoney(p.avgCost) }}</td>
-                  <td>{{ p.livePrice != null ? `$${formatMoney(p.livePrice)}` : '—' }}</td>
-                  <td>{{ p.marketValueARS != null ? `$${formatMoney(p.marketValueARS)}` : '—' }}</td>
-                  <td v-if="p.unrealizedARS === null">—</td>
-                  <td v-else :class="p.unrealizedARS >= 0 ? 'pl-pos' : 'pl-neg'">
-                    {{ p.unrealizedARS >= 0 ? '+' : '' }}${{ formatMoney(p.unrealizedARS) }}
-                    <span class="pct-tag">({{ formatPct(p.unrealizedARSPct) }})</span>
-                  </td>
-                  <td>
-                    <template v-if="p.marketValueUSD != null">
-                      US${{ formatMoney(p.marketValueUSD) }}
-                      <span
-                        v-if="p.assetType === 'CEDEAR'"
-                        class="pct-tag"
-                        :title="p.usesRatioValuation ? 'Valor real: calculado con ratio + precio de la acción' : 'Aproximado con el CCL general (falta ratio o precio de la acción)'"
-                      >{{ p.usesRatioValuation ? '✓' : '≈' }}</span>
-                    </template>
-                    <template v-else>—</template>
-                  </td>
-                  <td v-if="p.unrealizedUSD === null">—</td>
-                  <td v-else :class="p.unrealizedUSD >= 0 ? 'pl-pos' : 'pl-neg'">
-                    {{ p.unrealizedUSD >= 0 ? '+' : '' }}US${{ formatMoney(p.unrealizedUSD) }}
-                    <span class="pct-tag">({{ formatPct(p.unrealizedUSDPct) }})</span>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-          <div class="table-hint">
-            Precio en vivo solo para CEDEARs (fuente: data912.com, cada 30s). Para acciones argentinas
-            todavía no hay precio en vivo conectado acá. El valor y rendimiento en USD de los CEDEARs se
-            calcula con el ratio real contra la acción subyacente (✓); si el ratio no está disponible
-            se aproxima con el CCL general (≈) — completalo a mano debajo del ticker para tener el número exacto.
-          </div>
-        </div>
 
-        <!-- Resumen por ticker (histórico, incluye posiciones cerradas) -->
-        <div v-if="summary.bySymbol.length" class="by-symbol-section">
-          <div class="section-title">Resultado por ticker (histórico)</div>
+                    <div
+                      v-if="position.assetType === 'CEDEAR'"
+                      class="ratio-row"
+                    >
+                      <span>Ratio</span>
+
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        :value="getCedearRatio(position.ticker) || ''"
+                        @change="
+                          setManualRatio(
+                            position.ticker,
+                            $event.target.value
+                          )
+                        "
+                      >
+
+                      <span
+                        v-if="
+                          cedearRatiosAuto[position.ticker]
+                        "
+                        class="auto-tag"
+                      >
+                        auto
+                      </span>
+
+                      <span
+                        v-if="position.impliedCCL"
+                        class="ratio-subrow-ccl"
+                      >
+                        CCL implícito:
+                        $
+                        {{
+                          formatMoney(
+                            position.impliedCCL
+                          )
+                        }}
+                      </span>
+                    </div>
+
+                  </td>
+
+                  <td>
+                    {{ formatNum(position.quantity, 4) }}
+                  </td>
+
+                  <td>
+                    $
+                    {{ formatMoney(position.avgCost) }}
+                  </td>
+
+                  <td>
+                    $
+                    {{
+                      formatMoney(
+                        position.currentPriceARS
+                      )
+                    }}
+                  </td>
+
+                  <td>
+                    $
+                    {{
+                      formatMoney(
+                        position.marketValueARS
+                      )
+                    }}
+                  </td>
+
+                  <td
+                    :class="
+                      position.unrealizedARS >= 0
+                        ? 'pl-pos'
+                        : 'pl-neg'
+                    "
+                  >
+                    $
+                    {{
+                      formatMoney(
+                        position.unrealizedARS
+                      )
+                    }}
+                  </td>
+
+                  <td>
+                    USD
+                    {{
+                      formatMoney(
+                        position.currentValueUSD
+                      )
+                    }}
+                  </td>
+
+                  <td
+                    :class="
+                      position.unrealizedUSD >= 0
+                        ? 'pl-pos'
+                        : 'pl-neg'
+                    "
+                  >
+                    USD
+                    {{
+                      formatMoney(
+                        position.unrealizedUSD
+                      )
+                    }}
+                  </td>
+
+                </tr>
+
+              </tbody>
+
+            </table>
+
+          </div>
+
+          <p class="table-hint">
+            En CEDEARs, el valor USD se calcula utilizando
+            el <strong>ratio del CEDEAR</strong> y el precio
+            de la acción subyacente.
+          </p>
+
+        </section>
+
+        <!-- HISTORICAL SUMMARY -->
+        <section class="history-section">
+
+          <div class="table-header-row">
+            <h3 class="section-title">
+              Resumen histórico por ticker
+            </h3>
+          </div>
+
           <div class="by-symbol-table-wrap">
-            <table class="by-symbol-table">
+
+            <table class="by-symbol-table history-table">
+
               <thead>
                 <tr>
                   <th>Ticker</th>
                   <th>Tipo</th>
-                  <th>Cantidad</th>
-                  <th>Costo prom. (ARS)</th>
-                  <th>Costo prom. (USD)</th>
-                  <th>P&L realizado (ARS)</th>
-                  <th>P&L realizado (USD)</th>
+                  <th>Comprado</th>
+                  <th>Vendido</th>
+                  <th>Posición</th>
+                  <th>Invertido</th>
+                  <th>Realizado ARS</th>
+                  <th>Realizado USD</th>
                 </tr>
               </thead>
+
               <tbody>
-                <tr v-for="s in summary.bySymbol" :key="s.ticker">
-                  <td class="ticker-cell">{{ s.ticker }}</td>
-                  <td><span class="badge" :class="s.assetType === 'CEDEAR' ? 'badge-cedear' : 'badge-ar'">{{ s.assetType === 'CEDEAR' ? 'CEDEAR' : 'Acción AR' }}</span></td>
-                  <td>{{ formatNum(s.quantity) }}</td>
-                  <td>${{ formatMoney(s.avgCost) }}</td>
-                  <td :title="s.usdIncomplete ? 'Faltan cargar CCL en alguna operación de este ticker' : ''">
-                    {{ s.usdIncomplete ? '—' : `US$${formatMoney(s.avgCostUSD)}` }}
-                  </td>
-                  <td :class="s.realizedPL >= 0 ? 'pl-pos' : 'pl-neg'">
-                    {{ s.realizedPL >= 0 ? '+' : '' }}${{ formatMoney(s.realizedPL) }}
-                  </td>
-                  <td v-if="s.usdIncomplete" :title="'Faltan cargar CCL en alguna operación de este ticker'">—</td>
-                  <td v-else :class="s.realizedPLUSD >= 0 ? 'pl-pos' : 'pl-neg'">
-                    {{ s.realizedPLUSD >= 0 ? '+' : '' }}US${{ formatMoney(s.realizedPLUSD) }}
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-        </div>
 
-        <!-- Formulario alta / edición -->
-        <form class="trade-form" @submit.prevent="submitForm">
-          <div class="section-title">{{ editingId ? 'Editar operación' : 'Nueva operación' }}</div>
-          <div class="form-grid">
-            <div class="form-field">
-              <label>Fecha</label>
-              <input type="date" v-model="form.date" required>
-            </div>
-            <div class="form-field">
-              <label>Activo</label>
-              <select v-model="form.assetType">
-                <option value="CEDEAR">CEDEAR</option>
-                <option value="ACCION_AR">Acción argentina</option>
-              </select>
-            </div>
-            <div class="form-field">
-              <label>Ticker</label>
-              <input type="text" v-model="form.ticker" placeholder="Ej: KO, GGAL" style="text-transform:uppercase" required>
-            </div>
-            <div class="form-field">
-              <label>Operación</label>
-              <select v-model="form.operation">
-                <option value="COMPRA">Compra</option>
-                <option value="VENTA">Venta</option>
-              </select>
-            </div>
-            <div class="form-field">
-              <label>Cantidad</label>
-              <input type="number" min="0" step="any" v-model="form.quantity" placeholder="Ej: 100" required>
-            </div>
-            <div class="form-field">
-              <label>Precio unitario ($)</label>
-              <input type="number" min="0" step="any" v-model="form.price" placeholder="Ej: 5230" required>
-            </div>
-            <div class="form-field">
-              <label>Comisión ($)</label>
-              <input type="number" min="0" step="any" v-model="form.fee" placeholder="Opcional">
-            </div>
-            <div class="form-field">
-              <label>
-                Dólar CCL del día
-                <span v-if="cclLoading" class="auto-tag">(buscando...)</span>
-                <span v-else-if="cclIsAuto && form.ccl" class="auto-tag">(automático)</span>
-              </label>
-              <div class="ccl-input-row">
-                <input
-                  type="number" min="0" step="any"
-                  v-model="form.ccl"
-                  @input="onCclManualInput"
-                  placeholder="Ej: 1320.50"
+                <tr
+                  v-for="row in summary.bySymbol"
+                  :key="row.ticker"
                 >
-                <button type="button" class="icon-btn" title="Volver a buscar el CCL de esta fecha" @click="refetchCCL">🔄</button>
-              </div>
-              <div v-if="cclMsg" class="ccl-hint">{{ cclMsg }}</div>
-            </div>
-            <div class="form-field form-field-wide">
-              <label>Notas</label>
-              <input type="text" v-model="form.notes" placeholder="Opcional">
-            </div>
+
+                  <td class="ticker-cell">
+                    {{ row.ticker }}
+                  </td>
+
+                  <td>
+                    <span class="badge">
+                      {{ row.assetType }}
+                    </span>
+                  </td>
+
+                  <td>
+                    {{ formatNum(row.bought || 0, 4) }}
+                  </td>
+
+                  <td>
+                    {{ formatNum(row.sold || 0, 4) }}
+                  </td>
+
+                  <td>
+                    {{ formatNum(row.quantity || 0, 4) }}
+                  </td>
+
+                  <td>
+                    $
+                    {{
+                      formatMoney(
+                        row.invested || 0
+                      )
+                    }}
+                  </td>
+
+                  <td
+                    :class="
+                      Number(row.realizedPL || 0) >= 0
+                        ? 'pl-pos'
+                        : 'pl-neg'
+                    "
+                  >
+                    $
+                    {{
+                      formatMoney(
+                        row.realizedPL || 0
+                      )
+                    }}
+                  </td>
+
+                  <td
+                    :class="
+                      Number(row.realizedPLUSD || 0) >= 0
+                        ? 'pl-pos'
+                        : 'pl-neg'
+                    "
+                  >
+                    USD
+                    {{
+                      formatMoney(
+                        row.realizedPLUSD || 0
+                      )
+                    }}
+                  </td>
+
+                </tr>
+
+              </tbody>
+
+            </table>
+
           </div>
 
-          <div v-if="formError" class="form-error">{{ formError }}</div>
+        </section>
+
+        <!-- FORM -->
+        <section class="trade-form">
+
+          <div class="table-header-row">
+
+            <h3 class="section-title">
+              {{
+                editingId
+                  ? 'Editar operación'
+                  : 'Nueva operación'
+              }}
+            </h3>
+
+          </div>
+
+          <div class="form-grid">
+
+            <!-- DATE -->
+            <div class="form-field">
+
+              <label>
+                Fecha
+              </label>
+
+              <input
+                v-model="form.date"
+                type="date"
+              >
+
+            </div>
+
+            <!-- ASSET -->
+            <div class="form-field">
+
+              <label>
+                Activo
+              </label>
+
+              <select v-model="form.assetType">
+                <option value="CEDEAR">
+                  CEDEAR
+                </option>
+
+                <option value="ACCION">
+                  Acción
+                </option>
+
+                <option value="ADR">
+                  ADR
+                </option>
+
+                <option value="BONO">
+                  Bono
+                </option>
+
+                <option value="ON">
+                  ON
+                </option>
+
+                <option value="FCI">
+                  FCI
+                </option>
+
+                <option value="OTRO">
+                  Otro
+                </option>
+              </select>
+
+            </div>
+
+            <!-- TICKER -->
+            <div class="form-field">
+
+              <label>
+                Ticker
+              </label>
+
+              <input
+                v-model="form.ticker"
+                type="text"
+                placeholder="Ej: AAPL"
+                @input="
+                  form.ticker =
+                    form.ticker.toUpperCase()
+                "
+              >
+
+            </div>
+
+            <!-- OPERATION -->
+            <div class="form-field">
+
+              <label>
+                Operación
+              </label>
+
+              <select v-model="form.operation">
+                <option value="COMPRA">
+                  COMPRA
+                </option>
+
+                <option value="VENTA">
+                  VENTA
+                </option>
+              </select>
+
+            </div>
+
+            <!-- QUANTITY -->
+            <div class="form-field">
+
+              <label>
+                Cantidad
+              </label>
+
+              <input
+                v-model="form.quantity"
+                type="number"
+                min="0"
+                step="0.0001"
+                placeholder="0"
+              >
+
+            </div>
+
+            <!-- PRICE -->
+            <div class="form-field">
+
+              <label>
+                Precio unitario ARS
+              </label>
+
+              <input
+                v-model="form.price"
+                type="number"
+                min="0"
+                step="0.01"
+                placeholder="0.00"
+              >
+
+            </div>
+
+            <!-- FEE -->
+            <div class="form-field">
+
+              <label>
+                Comisión
+              </label>
+
+              <input
+                v-model="form.fee"
+                type="number"
+                min="0"
+                step="0.01"
+                placeholder="0.00"
+              >
+
+            </div>
+
+            <!-- CCL -->
+            <div class="form-field">
+
+              <label>
+                CCL
+                <span
+                  v-if="cclIsAuto"
+                  class="auto-tag"
+                >
+                  automático
+                </span>
+              </label>
+
+              <div class="ccl-input-row">
+
+                <input
+                  v-model="form.ccl"
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  placeholder="CCL"
+                  @input="onCclManualInput"
+                >
+
+                <button
+                  type="button"
+                  class="icon-btn"
+                  title="Actualizar CCL"
+                  :disabled="cclLoading"
+                  @click="refetchCCL"
+                >
+                  ↻
+                </button>
+
+              </div>
+
+              <div
+                v-if="cclMsg"
+                class="ccl-hint"
+              >
+                {{ cclMsg }}
+              </div>
+
+            </div>
+
+            <!-- NOTES -->
+            <div class="form-field form-field-wide">
+
+              <label>
+                Notas
+              </label>
+
+              <textarea
+                v-model="form.notes"
+                rows="2"
+                placeholder="Motivo de entrada, estrategia, observaciones..."
+              />
+
+            </div>
+
+          </div>
+
+          <div
+            v-if="errorMsg"
+            class="error-msg"
+          >
+            {{ errorMsg }}
+          </div>
 
           <div class="form-actions">
-            <button type="submit" class="btn-primary" :disabled="saving">
-              {{ saving ? 'Guardando...' : editingId ? 'Guardar cambios' : 'Agregar operación' }}
-            </button>
-            <button v-if="editingId" type="button" class="btn-secondary" @click="cancelEdit">Cancelar</button>
-          </div>
-        </form>
 
-        </template>
+            <button
+              v-if="editingId"
+              type="button"
+              class="btn-secondary"
+              @click="cancelEdit"
+            >
+              Cancelar
+            </button>
+
+            <button
+              type="button"
+              class="btn-primary"
+              :disabled="saving"
+              @click="submitForm"
+            >
+              {{
+                saving
+                  ? 'Guardando...'
+                  : editingId
+                    ? 'Guardar cambios'
+                    : 'Registrar trade'
+              }}
+            </button>
+
+          </div>
+
+        </section>
+
       </template>
+
     </div>
   </div>
 </template>
 
 <style scoped>
+/* =========================================================
+   TRADING JOURNAL — PROFESSIONAL UI
+   Visual layer only. No business logic modified.
+   ========================================================= */
+
 .trades-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.6);
+  z-index: 1000;
+  padding: 18px;
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 1000;
-  padding: 24px;
+  background: rgba(0, 0, 0, 0.72);
+  backdrop-filter: blur(5px);
+  -webkit-backdrop-filter: blur(5px);
 }
 
 .trades-modal {
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: 14px;
-  width: 100%;
-  max-width: 1440px;
-  max-height: 96vh;
-  overflow-y: auto;
-  padding: 32px 40px;
+  --accent: var(--blue, #2563eb);
+
+  box-sizing: border-box;
+  width: min(1500px, 100%);
+  max-height: calc(100vh - 36px);
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+
   display: flex;
   flex-direction: column;
-  gap: 28px;
-  font-size: 15px;
+  gap: 22px;
+
+  padding: 26px 30px 30px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+
+  color: var(--text);
+  font-size: 14px;
   line-height: 1.5;
+
+  box-shadow:
+    0 24px 70px rgba(0, 0, 0, 0.38),
+    0 4px 18px rgba(0, 0, 0, 0.22);
 }
 
+.trades-modal,
+.trades-modal * {
+  box-sizing: border-box;
+}
+
+.trades-modal::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.trades-modal::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.trades-modal::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 999px;
+}
+
+.trades-modal::-webkit-scrollbar-thumb:hover {
+  background: var(--text-dim);
+}
+
+/* HEADER */
+
 .trades-header {
+  position: sticky;
+  top: -26px;
+  z-index: 20;
+
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 18px;
+
+  padding: 0 0 18px;
+  background: var(--panel);
   border-bottom: 1px solid var(--border);
-  padding-bottom: 20px;
 }
 
 .trades-title {
-  font-size: 22px;
-  font-weight: 700;
-  color: var(--text);
+  min-width: 0;
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
+
+  color: var(--text);
+  font-size: 21px;
+  font-weight: 750;
+  letter-spacing: -0.01em;
 }
 
 .close-btn {
+  flex: 0 0 auto;
+  width: 36px;
+  height: 36px;
+
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+
   background: var(--bg);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: 9px;
   color: var(--text-dim);
-  width: 38px;
-  height: 38px;
   cursor: pointer;
-  font-size: 17px;
+  font-size: 16px;
+
+  transition:
+    color 0.15s ease,
+    border-color 0.15s ease,
+    background 0.15s ease,
+    transform 0.15s ease;
 }
 
 .close-btn:hover {
   color: var(--text);
   border-color: var(--text-dim);
+  background: var(--panel);
+  transform: translateY(-1px);
 }
 
-.trades-loading,
-.empty-state {
-  text-align: center;
-  color: var(--text-dim);
-  font-size: 14px;
-  padding: 32px 0;
-}
+/* LOADING / ERROR */
 
-.trades-error,
-.form-error {
-  background: rgba(239, 68, 68, 0.1);
-  border: 1px solid rgba(239, 68, 68, 0.4);
-  color: #ef4444;
+.loading {
   padding: 12px 14px;
-  border-radius: 8px;
-  font-size: 13px;
+  color: var(--text-dim);
+  text-align: center;
 }
+
+.error-msg {
+  padding: 11px 14px;
+  color: #fca5a5;
+  background: rgba(239, 68, 68, 0.08);
+  border: 1px solid rgba(239, 68, 68, 0.28);
+  border-radius: 9px;
+}
+
+/* SUMMARY */
 
 .summary-bar {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
-  gap: 16px;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 10px;
 }
 
 .summary-card {
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  padding: 18px 20px;
+  min-width: 0;
+  min-height: 82px;
+
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  justify-content: center;
+  gap: 5px;
+
+  padding: 13px 15px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 11px;
+
+  transition:
+    border-color 0.15s ease,
+    transform 0.15s ease;
+}
+
+.summary-card:hover {
+  border-color: color-mix(
+    in srgb,
+    var(--border) 60%,
+    var(--accent)
+  );
+
+  transform: translateY(-1px);
 }
 
 .summary-label {
-  font-size: 12px;
   color: var(--text-dim);
-  letter-spacing: 0.2px;
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.045em;
+  line-height: 1.2;
+  text-transform: uppercase;
 }
 
 .summary-card strong {
-  font-size: 24px;
+  min-width: 0;
+  overflow: hidden;
+
   color: var(--text);
-  font-family: var(--font-num, inherit);
+  font-size: 21px;
+  font-weight: 750;
+  line-height: 1.15;
+
+  font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.section-title {
-  font-size: 15px;
-  font-weight: 700;
+/* TABS */
+
+.view-tabs {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+
+  padding: 4px;
+
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 11px;
+}
+
+.view-tab {
+  flex: 0 0 auto;
+
+  padding: 9px 15px;
+
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 8px;
+
+  color: var(--text-dim);
+  cursor: pointer;
+
+  font-size: 13px;
+  font-weight: 650;
+  white-space: nowrap;
+
+  transition:
+    color 0.15s ease,
+    background 0.15s ease,
+    border-color 0.15s ease;
+}
+
+.view-tab:hover {
   color: var(--text);
+  background: var(--panel);
+}
+
+.view-tab.active {
+  color: var(--text);
+  background: rgba(37, 99, 235, 0.12);
+  border-color: rgba(37, 99, 235, 0.55);
+
+  box-shadow:
+    inset 0 0 0 1px rgba(37, 99, 235, 0.08);
+}
+
+/* GENERIC SECTION */
+
+.section-title {
+  margin: 0;
+
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 750;
+  letter-spacing: 0.01em;
 }
 
 .table-header-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 12px;
+  gap: 16px;
 }
 
-.search-box {
-  position: relative;
-  display: flex;
-  align-items: center;
-  flex: 1;
-  min-width: 200px;
-  max-width: 320px;
+.table-header-row h3 {
+  margin: 0;
 }
 
-.search-box input {
-  width: 100%;
-  background: var(--panel);
+.search-input {
+  width: min(320px, 100%);
+  min-width: 0;
+
+  padding: 10px 12px;
+
+  background: var(--bg);
   border: 1px solid var(--border);
   border-radius: 8px;
-  padding: 10px 32px 10px 14px;
   color: var(--text);
-  font-size: 14px;
-  font-family: inherit;
+
+  font: inherit;
+  font-size: 13px;
+
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
 }
 
-.search-box input:focus {
+.search-input::placeholder {
+  color: var(--text-dim);
+}
+
+.search-input:focus {
   outline: none;
-  border-color: var(--blue, #2563eb);
+  border-color: var(--accent);
+
+  box-shadow:
+    0 0 0 3px rgba(37, 99, 235, 0.12);
 }
 
-.search-clear {
-  position: absolute;
-  right: 8px;
-  background: none;
-  border: none;
-  color: var(--text-dim);
-  cursor: pointer;
-  font-size: 13px;
-  padding: 4px;
-}
-
-.search-clear:hover {
-  color: var(--text);
-}
-
-.pagination-bar {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 18px;
-  padding-top: 6px;
-}
-
-.page-btn {
-  background: var(--bg);
-  border: 1px solid var(--border);
-  color: var(--text-dim);
-  border-radius: 8px;
-  padding: 9px 16px;
-  font-size: 13px;
-  font-weight: 600;
-  cursor: pointer;
-}
-
-.page-btn:hover:not(:disabled) {
-  color: var(--text);
-  border-color: var(--text-dim);
-}
-
-.page-btn:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
-}
-
-.page-info {
-  font-size: 13px;
-  color: var(--text-dim);
-  white-space: nowrap;
-}
-
-.view-tabs {
-  display: flex;
-  gap: 12px;
-  border-bottom: 1px solid var(--border);
-  padding-bottom: 20px;
-}
-
-.view-tab {
-  background: var(--bg);
-  border: 1px solid var(--border);
-  color: var(--text-dim);
-  border-radius: 10px;
-  padding: 12px 20px;
-  font-size: 14px;
-  font-weight: 700;
-  cursor: pointer;
-}
-
-.view-tab:hover {
-  color: var(--text);
-  border-color: var(--text-dim);
-}
-
-.view-tab.active {
-  background: rgba(37, 99, 235, 0.15);
-  border-color: #2563eb;
-  color: var(--blue);
-}
+/* FULL DETAIL */
 
 .full-detail-screen {
   display: flex;
   flex-direction: column;
-  gap: 18px;
+  gap: 14px;
+
+  min-width: 0;
 }
 
 .entry-cards {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 10px;
 }
 
 .entry-card {
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  padding: 22px 24px;
+  min-width: 0;
+
+  padding: 17px 19px;
+
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 13px;
+
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 11px;
+
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
+}
+
+.entry-card:hover {
+  border-color: color-mix(
+    in srgb,
+    var(--border) 65%,
+    var(--accent)
+  );
+
+  box-shadow:
+    0 5px 18px rgba(0, 0, 0, 0.14);
 }
 
 .entry-card-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 10px;
+  gap: 12px;
 }
 
-.entry-card-title {
+.entry-card-ticker {
+  min-width: 0;
+
   display: flex;
   align-items: center;
-  gap: 10px;
   flex-wrap: wrap;
+  gap: 7px;
 }
 
-.entry-card-title .ticker-cell {
-  font-size: 18px;
+.entry-card-ticker strong {
+  color: var(--text);
+  font-size: 16px;
+  font-weight: 750;
 }
 
 .entry-card-actions {
-  display: flex;
-  gap: 8px;
-}
+  flex: 0 0 auto;
 
-.entry-card-dates {
-  font-size: 13px;
-  color: var(--text-dim);
-  font-family: var(--font-num, inherit);
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .entry-card-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
-  gap: 16px;
-  padding: 16px 0;
-  border-top: 1px solid var(--border);
-  border-bottom: 1px solid var(--border);
+  grid-template-columns: repeat(6, minmax(120px, 1fr));
+  gap: 1px;
+
+  overflow: hidden;
+
+  background: var(--border);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.detail-item {
+  min-width: 0;
+  padding: 10px 12px;
+  background: var(--bg);
+}
+
+.detail-item label {
+  display: block;
+  margin-bottom: 3px;
+
+  color: var(--text-dim);
+  font-size: 10.5px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  line-height: 1.2;
+  text-transform: uppercase;
+}
+
+.detail-item strong {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 650;
+
+  font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .entry-card-notes {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-  gap: 14px;
-}
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: baseline;
+  gap: 10px;
 
-.detail-item {
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-  min-width: 0;
-}
+  padding-top: 11px;
+  border-top: 1px solid var(--border);
 
-.detail-label {
-  font-size: 12px;
   color: var(--text-dim);
+  font-size: 12.5px;
 }
 
-.detail-value {
-  font-size: 15px;
+.entry-card-notes strong {
   color: var(--text);
-  font-family: var(--font-num, inherit);
+  font-weight: 500;
+  overflow-wrap: anywhere;
 }
 
-.detail-text {
-  font-size: 14px;
-  color: var(--text);
-  line-height: 1.6;
-  white-space: pre-wrap;
-  word-break: break-word;
-  font-family: inherit;
-  margin: 0;
+.empty-state {
+  padding: 34px 20px;
+
+  color: var(--text-dim);
+
+  background: var(--bg);
+  border: 1px dashed var(--border);
+  border-radius: 11px;
+
+  text-align: center;
 }
 
-.by-symbol-table-wrap,
-.trades-table-wrap {
-  overflow-x: auto;
+/* BADGES / P&L */
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+
+  min-height: 22px;
+  padding: 3px 8px;
+
   border: 1px solid var(--border);
-  border-radius: 10px;
-}
+  border-radius: 999px;
 
-.by-symbol-table,
-.trades-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 14.5px;
-}
-
-.by-symbol-table th,
-.trades-table th {
-  text-align: left;
-  padding: 14px 18px;
-  background: var(--bg);
   color: var(--text-dim);
-  font-weight: 600;
-  font-size: 12.5px;
-  border-bottom: 1px solid var(--border);
+  font-size: 10.5px;
+  font-weight: 700;
+  line-height: 1;
   white-space: nowrap;
 }
 
-.by-symbol-table td,
-.trades-table td {
-  padding: 14px 18px;
-  border-bottom: 1px solid var(--border);
-  color: var(--text);
-  white-space: nowrap;
-  font-family: var(--font-num, inherit);
+.badge-compra {
+  color: #4ade80;
+  background: rgba(34, 197, 94, 0.08);
+  border-color: rgba(34, 197, 94, 0.22);
 }
 
-.trades-table tbody tr:last-child td,
-.by-symbol-table tbody tr:last-child td {
-  border-bottom: none;
-}
-
-.trades-table tbody tr:hover {
-  background: var(--bg);
-}
-
-.table-hint {
-  font-size: 12.5px;
-  color: var(--text-dim);
-  line-height: 1.6;
-  padding: 4px 2px 0;
+.badge-venta {
+  color: #f87171;
+  background: rgba(239, 68, 68, 0.08);
+  border-color: rgba(239, 68, 68, 0.22);
 }
 
 .pct-tag {
-  font-size: 12px;
-  opacity: 0.85;
-}
+  display: inline-flex;
+  align-items: center;
 
-.row-editing {
-  background: rgba(37, 99, 235, 0.08);
-}
+  min-height: 20px;
+  padding: 2px 7px;
 
-.ticker-cell {
-  font-weight: 700;
-  font-size: 15px;
-}
-
-.notes-cell {
-  max-width: 200px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  font-family: inherit;
-  color: var(--text-dim);
-}
-
-.badge {
-  display: inline-block;
-  padding: 4px 11px;
+  border: 1px solid var(--border);
   border-radius: 999px;
-  font-size: 11.5px;
+
+  font-size: 10.5px;
   font-weight: 700;
-}
-
-.badge-cedear {
-  background: rgba(59, 130, 246, 0.15);
-  color: #60a5fa;
-}
-
-.badge-ar {
-  background: rgba(168, 85, 247, 0.15);
-  color: #c084fc;
-}
-
-.badge-buy {
-  background: rgba(34, 197, 94, 0.15);
-  color: #22c55e;
-}
-
-.badge-sell {
-  background: rgba(239, 68, 68, 0.15);
-  color: #ef4444;
+  line-height: 1;
 }
 
 .pl-pos {
@@ -1289,53 +2159,310 @@ onUnmounted(() => {
   color: #ef4444 !important;
 }
 
-.actions-cell {
-  display: flex;
-  gap: 8px;
+/* TABLES */
+
+.by-symbol-table-wrap,
+.trades-table-wrap {
+  width: 100%;
+  overflow: auto;
+
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 11px;
+
+  scrollbar-gutter: stable;
 }
 
-.icon-btn {
+.by-symbol-table-wrap {
+  max-height: 390px;
+}
+
+.trades-table-wrap {
+  max-height: 520px;
+}
+
+.by-symbol-table-wrap::-webkit-scrollbar,
+.trades-table-wrap::-webkit-scrollbar {
+  width: 7px;
+  height: 7px;
+}
+
+.by-symbol-table-wrap::-webkit-scrollbar-thumb,
+.trades-table-wrap::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 999px;
+}
+
+.by-symbol-table,
+.trades-table {
+  width: 100%;
+
+  border-collapse: separate;
+  border-spacing: 0;
+
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.by-symbol-table {
+  min-width: 1120px;
+}
+
+.trades-table {
+  min-width: 900px;
+}
+
+.by-symbol-table th,
+.by-symbol-table td,
+.trades-table th,
+.trades-table td {
+  padding: 10px 13px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: middle;
+}
+
+.by-symbol-table th,
+.trades-table th {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+
+  background: var(--bg);
+  color: var(--text-dim);
+
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.045em;
+  line-height: 1.2;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.by-symbol-table td,
+.trades-table td {
+  color: var(--text);
+  white-space: nowrap;
+}
+
+.by-symbol-table tr:last-child td,
+.trades-table tr:last-child td {
+  border-bottom: 0;
+}
+
+.by-symbol-table tbody tr:hover td,
+.trades-table tbody tr:hover td {
+  background: rgba(255, 255, 255, 0.018);
+}
+
+.positions-table th:not(:first-child),
+.positions-table td:not(:first-child),
+.history-table th:not(:first-child),
+.history-table td:not(:first-child),
+.trades-table th:not(:first-child),
+.trades-table td:not(:first-child) {
+  text-align: right;
+}
+
+.positions-table th:first-child,
+.positions-table td:first-child,
+.history-table th:first-child,
+.history-table td:first-child {
+  text-align: left;
+}
+
+.ticker-cell {
+  min-width: 155px;
+
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 750;
+}
+
+.ticker-cell > div:first-child {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.ratio-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+
+  margin-top: 6px;
+
+  color: var(--text-dim);
+  font-size: 10.5px;
+  font-weight: 500;
+}
+
+.ratio-row input {
+  width: 55px;
+  height: 24px;
+  padding: 3px 6px;
+
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+
+  color: var(--text);
+
+  font: inherit;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.ratio-row input:focus {
+  outline: none;
+  border-color: var(--accent);
+
+  box-shadow:
+    0 0 0 2px rgba(37, 99, 235, 0.10);
+}
+
+.table-hint {
+  margin: -4px 1px 0;
+
+  color: var(--text-dim);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.table-hint strong {
+  color: var(--text);
+  font-weight: 650;
+}
+
+.by-symbol-section,
+.history-section {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+
+/* PAGINATION */
+
+.pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 5px;
+
+  padding-top: 3px;
+}
+
+.pagination button {
+  min-width: 32px;
+  height: 32px;
+  padding: 0 9px;
+
   background: var(--bg);
   border: 1px solid var(--border);
   border-radius: 7px;
-  width: 32px;
-  height: 32px;
-  cursor: pointer;
+
   color: var(--text-dim);
-  font-size: 14px;
+  cursor: pointer;
+
+  font: inherit;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.pagination button:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--text-dim);
+}
+
+.pagination button.active {
+  color: #fff;
+  background: #2563eb;
+  border-color: #2563eb;
+}
+
+.pagination button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.pagination span {
+  padding: 0 4px;
+  color: var(--text-dim);
+}
+
+/* ACTIONS */
+
+.actions-cell {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.icon-btn {
+  width: 31px;
+  height: 31px;
+  padding: 0;
+
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+
+  color: var(--text-dim);
+  cursor: pointer;
+
+  font-size: 13px;
+
+  transition:
+    color 0.15s ease,
+    border-color 0.15s ease,
+    background 0.15s ease;
 }
 
 .icon-btn:hover {
   color: var(--text);
   border-color: var(--text-dim);
+  background: var(--panel);
 }
 
 .icon-btn-danger:hover {
   color: #ef4444;
-  border-color: #ef4444;
+  border-color: rgba(239, 68, 68, 0.6);
+  background: rgba(239, 68, 68, 0.06);
 }
 
+/* FORM */
+
 .trade-form {
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  padding: 24px 26px;
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  gap: 19px;
+
+  padding: 20px 21px;
+
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 11px;
 }
 
 .form-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
-  gap: 18px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px 15px;
 }
 
 .form-field {
+  min-width: 0;
+
   display: flex;
   flex-direction: column;
-  gap: 7px;
-  min-width: 0;
+  gap: 6px;
 }
 
 .form-field-wide {
@@ -1343,22 +2470,25 @@ onUnmounted(() => {
 }
 
 .form-field label {
-  font-size: 13px;
-  color: var(--text-dim);
-  font-weight: 600;
   display: flex;
   align-items: center;
   gap: 6px;
+
+  color: var(--text-dim);
+  font-size: 11.5px;
+  font-weight: 650;
+  line-height: 1.25;
 }
 
 .auto-tag {
   color: #22c55e;
-  font-weight: 600;
+  font-weight: 650;
 }
 
 .ccl-input-row {
   display: flex;
-  gap: 8px;
+  align-items: stretch;
+  gap: 7px;
 }
 
 .ccl-input-row input {
@@ -1367,19 +2497,22 @@ onUnmounted(() => {
 }
 
 .ccl-hint {
-  font-size: 12px;
   color: #fbbf24;
-  line-height: 1.5;
+  font-size: 10.5px;
+  line-height: 1.4;
 }
 
 .ratio-subrow {
   display: flex;
   align-items: center;
-  gap: 7px;
-  margin-top: 6px;
-  font-size: 13px;
+  flex-wrap: wrap;
+  gap: 6px;
+
+  margin-top: 5px;
+
   color: var(--text-dim);
-  white-space: nowrap;
+  font-size: 11px;
+  white-space: normal;
 }
 
 .ratio-subrow-ccl {
@@ -1387,61 +2520,143 @@ onUnmounted(() => {
 }
 
 .ratio-input {
-  width: 64px;
+  width: 62px;
+  height: 27px;
+  padding: 4px 7px;
+
   background: var(--panel);
   border: 1px solid var(--border);
-  border-radius: 7px;
-  padding: 5px 8px;
+  border-radius: 6px;
+
   color: var(--text);
-  font-size: 13px;
-  font-family: inherit;
+
+  font: inherit;
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
 }
 
 .ratio-input:focus {
   outline: none;
-  border-color: var(--blue, #2563eb);
+  border-color: var(--accent);
+
+  box-shadow:
+    0 0 0 2px rgba(37, 99, 235, 0.10);
 }
 
 .form-field input,
 .form-field select {
+  width: 100%;
+  height: 41px;
+  min-width: 0;
+
+  padding: 9px 11px;
+
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 8px;
-  padding: 12px 14px;
+
   color: var(--text);
-  font-size: 15px;
-  font-family: inherit;
-  min-width: 0;
+
+  font: inherit;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease,
+    background 0.15s ease;
+}
+
+.form-field input::placeholder {
+  color: var(--text-dim);
+}
+
+.form-field input:hover,
+.form-field select:hover {
+  border-color: var(--text-dim);
 }
 
 .form-field input:focus,
 .form-field select:focus {
   outline: none;
-  border-color: var(--blue, #2563eb);
+  border-color: var(--accent);
+
+  box-shadow:
+    0 0 0 3px rgba(37, 99, 235, 0.11);
+}
+
+.form-field input[type='date'] {
+  color-scheme: dark;
+}
+
+.form-field textarea {
+  width: 100%;
+  min-height: 41px;
+
+  resize: vertical;
+  padding: 9px 11px;
+
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+
+  color: var(--text);
+
+  font: inherit;
+  font-size: 13px;
+}
+
+.form-field textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+
+  box-shadow:
+    0 0 0 3px rgba(37, 99, 235, 0.11);
 }
 
 .form-actions {
   display: flex;
-  gap: 12px;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+
+  padding-top: 2px;
+}
+
+.btn-primary,
+.btn-secondary {
+  min-height: 40px;
+  padding: 9px 17px;
+
+  border-radius: 8px;
+  cursor: pointer;
+
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease,
+    color 0.15s ease,
+    transform 0.15s ease;
 }
 
 .btn-primary {
   background: #2563eb;
   border: 1px solid #2563eb;
-  color: white;
-  border-radius: 9px;
-  padding: 13px 24px;
-  font-weight: 600;
-  font-size: 15px;
-  cursor: pointer;
+  color: #fff;
 }
 
-.btn-primary:hover {
+.btn-primary:hover:not(:disabled) {
   background: #1d4ed8;
+  border-color: #1d4ed8;
+  transform: translateY(-1px);
 }
 
 .btn-primary:disabled {
-  opacity: 0.6;
+  opacity: 0.55;
   cursor: not-allowed;
 }
 
@@ -1449,34 +2664,201 @@ onUnmounted(() => {
   background: var(--panel);
   border: 1px solid var(--border);
   color: var(--text-dim);
-  border-radius: 9px;
-  padding: 13px 24px;
-  font-weight: 600;
-  font-size: 15px;
-  cursor: pointer;
 }
 
 .btn-secondary:hover {
   color: var(--text);
   border-color: var(--text-dim);
+  transform: translateY(-1px);
 }
 
-@media (max-width: 760px) {
+/* KEYBOARD FOCUS */
+
+.close-btn:focus-visible,
+.view-tab:focus-visible,
+.icon-btn:focus-visible,
+.btn-primary:focus-visible,
+.btn-secondary:focus-visible,
+.pagination button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* RESPONSIVE */
+
+@media (max-width: 1250px) {
+  .summary-bar {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .entry-card-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .form-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 900px) {
+  .trades-overlay {
+    padding: 10px;
+  }
+
+  .trades-modal {
+    max-height: calc(100vh - 20px);
+    padding: 22px;
+    gap: 18px;
+    border-radius: 13px;
+  }
+
+  .trades-header {
+    top: -22px;
+  }
+
+  .summary-bar {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .entry-card-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .form-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 650px) {
   .trades-overlay {
     padding: 0;
   }
+
   .trades-modal {
-    max-width: 100%;
+    width: 100%;
     height: 100vh;
+    max-height: none;
+
+    padding: 18px 15px 22px;
+    gap: 17px;
+
     border-radius: 0;
-    padding: 22px 18px;
-    gap: 22px;
+    border-left: 0;
+    border-right: 0;
   }
+
+  .trades-header {
+    top: -18px;
+    padding-bottom: 14px;
+  }
+
+  .trades-title {
+    font-size: 18px;
+  }
+
+  .close-btn {
+    width: 34px;
+    height: 34px;
+  }
+
+  .summary-card {
+    min-height: 73px;
+    padding: 11px 12px;
+  }
+
+  .summary-card strong {
+    font-size: 18px;
+  }
+
+  .summary-label {
+    font-size: 10px;
+  }
+
+  .view-tabs {
+    overflow-x: auto;
+    justify-content: flex-start;
+    scrollbar-width: none;
+  }
+
+  .view-tabs::-webkit-scrollbar {
+    display: none;
+  }
+
+  .view-tab {
+    font-size: 12px;
+    padding: 8px 11px;
+  }
+
+  .table-header-row {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 9px;
+  }
+
+  .search-input {
+    width: 100%;
+  }
+
+  .entry-card {
+    padding: 14px;
+  }
+
+  .entry-card-header {
+    align-items: flex-start;
+  }
+
+  .entry-card-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .entry-card-notes {
+    grid-template-columns: 1fr;
+    gap: 4px;
+  }
+
+  .form-grid {
+    grid-template-columns: 1fr;
+  }
+
   .form-field-wide {
     grid-column: span 1;
   }
+
+  .trade-form {
+    padding: 16px;
+  }
+
+  .form-actions {
+    justify-content: stretch;
+  }
+
+  .form-actions button {
+    flex: 1;
+  }
+}
+
+@media (max-width: 420px) {
+  .summary-bar {
+    grid-template-columns: 1fr 1fr;
+    gap: 7px;
+  }
+
+  .summary-card {
+    padding: 10px;
+  }
+
   .summary-card strong {
-    font-size: 20px;
+    font-size: 16px;
+  }
+
+  .entry-card-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .pagination button {
+    min-width: 29px;
+    height: 29px;
+    padding: 0 7px;
   }
 }
 </style>
