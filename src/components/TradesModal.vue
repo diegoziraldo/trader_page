@@ -64,6 +64,14 @@ let intervaloUsaPrices = null
 const cedearRatios = ref({})     // { TICKER: ratio numérico }
 const cedearRatiosAuto = reactive({}) // { TICKER: true | false }
 
+// --- Tablas de resumen: plegables + búsqueda propia por ticker ---
+// Así, aunque se carguen muchos tickers, la vista no se hace inmensa: cada
+// tabla se puede colapsar y/o filtrar de forma independiente.
+const openPositionsOpen = ref(true)
+const openPositionsSearch = ref('')
+const bySymbolOpen = ref(true)
+const bySymbolSearch = ref('')
+
 // --- Autocompletado del CCL en el formulario ---
 const cclLoading = ref(false)
 const cclIsAuto = ref(false)
@@ -203,6 +211,20 @@ const openPositions = computed(() =>
       }
     })
 )
+
+// Filtro propio de la tabla "Posiciones abiertas" (no afecta al historial).
+const filteredOpenPositions = computed(() => {
+  const q = openPositionsSearch.value.trim().toUpperCase()
+  if (!q) return openPositions.value
+  return openPositions.value.filter((p) => p.ticker.toUpperCase().includes(q))
+})
+
+// Filtro propio de la tabla "Resultado por ticker" (no afecta al historial).
+const filteredBySymbol = computed(() => {
+  const q = bySymbolSearch.value.trim().toUpperCase()
+  if (!q) return summary.value.bySymbol
+  return summary.value.bySymbol.filter((s) => s.ticker.toUpperCase().includes(q))
+})
 
 async function loadAll() {
   loading.value = true
@@ -673,88 +695,119 @@ onUnmounted(() => {
         <template v-if="viewMode === 'form'">
         <!-- Posiciones abiertas: valor de mercado y rendimiento no realizado -->
         <div v-if="openPositions.length" class="by-symbol-section">
-          <div class="section-title">Posiciones abiertas — valor de mercado</div>
-          <div class="by-symbol-table-wrap">
-            <table class="by-symbol-table">
-              <thead>
-                <tr>
-                  <th>Ticker</th>
-                  <th>Cantidad</th>
-                  <th title="Precio en vivo, solo CEDEARs (data912)">Precio (ARS)</th>
-                  <th title="Con ratio conocido, el USD se calcula con el precio real de la acción. Sin ratio, se aproxima con el CCL general (≈).">Valor actual</th>
-                  <th title="Con ratio conocido, el USD se calcula con el precio real de la acción. Sin ratio, se aproxima con el CCL general (≈).">Rendimiento</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-for="p in openPositions" :key="p.ticker">
-                  <td>
-                    <div class="ticker-cell">{{ p.ticker }}</div>
-                    <div v-if="p.assetType === 'CEDEAR'" class="ratio-subrow">
-                      <span>Ratio:</span>
-                      <input
-                        type="number" min="0" step="any"
-                        :value="p.ratio ?? ''"
-                        @change="setManualRatio(p.ticker, $event.target.value)"
-                        placeholder="ej: 10"
-                        class="ratio-input"
-                        title="Cantidad de CEDEARs por 1 acción"
-                      >
-                      <span v-if="p.ratio != null && cedearRatiosAuto[p.ticker] !== false" class="auto-tag">auto</span>
-                    </div>
-                  </td>
-                  <td>{{ formatNum(p.quantity) }}</td>
-                  <td>
-                    <div class="stacked-cell">
-                      <span class="stacked-line-dim">Costo ${{ formatMoney(p.avgCost) }}</span>
-                      <span>{{ p.livePrice != null ? `Actual $${formatMoney(p.livePrice)}` : 'Actual —' }}</span>
-                    </div>
-                  </td>
-                  <td>
-                    <div class="stacked-cell">
-                      <span>{{ p.marketValueARS != null ? `$${formatMoney(p.marketValueARS)}` : '—' }}</span>
-                      <span class="stacked-line-dim">
-                        <template v-if="p.marketValueUSD != null">
-                          US${{ formatMoney(p.marketValueUSD) }}
-                          <span
-                            v-if="p.assetType === 'CEDEAR'"
-                            :title="p.usesRatioValuation ? 'Valor real: calculado con ratio + precio de la acción' : 'Aproximado con el CCL general (falta ratio o precio de la acción)'"
-                          >{{ p.usesRatioValuation ? '✓' : '≈' }}</span>
-                        </template>
-                        <template v-else>—</template>
-                      </span>
-                    </div>
-                  </td>
-                  <td>
-                    <div class="stacked-cell">
-                      <span v-if="p.unrealizedARS === null">—</span>
-                      <span v-else :class="p.unrealizedARS >= 0 ? 'pl-pos' : 'pl-neg'">
-                        {{ p.unrealizedARS >= 0 ? '+' : '' }}${{ formatMoney(p.unrealizedARS) }}
-                        <span class="pct-tag">({{ formatPct(p.unrealizedARSPct) }})</span>
-                      </span>
-                      <span v-if="p.unrealizedUSD === null" class="stacked-line-dim">—</span>
-                      <span v-else class="stacked-line-dim" :class="p.unrealizedUSD >= 0 ? 'pl-pos' : 'pl-neg'">
-                        {{ p.unrealizedUSD >= 0 ? '+' : '' }}US${{ formatMoney(p.unrealizedUSD) }}
-                        <span class="pct-tag">({{ formatPct(p.unrealizedUSDPct) }})</span>
-                      </span>
-                    </div>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
+          <div class="table-header-row">
+            <button type="button" class="section-toggle" @click="openPositionsOpen = !openPositionsOpen">
+              <span class="chevron" :class="{ 'chevron-open': openPositionsOpen }">▸</span>
+              <span class="section-title">Posiciones abiertas — valor de mercado ({{ openPositions.length }})</span>
+            </button>
+            <div v-if="openPositionsOpen" class="search-box">
+              <input
+                type="text"
+                v-model="openPositionsSearch"
+                placeholder="Buscar ticker..."
+                style="text-transform:uppercase"
+              >
+              <button v-if="openPositionsSearch" type="button" class="search-clear" @click="openPositionsSearch = ''">✕</button>
+            </div>
           </div>
-          <div class="table-hint">
-            Precio en vivo solo para CEDEARs (fuente: data912.com, cada 30s). En "Valor actual" y
-            "Rendimiento", la línea de arriba es en pesos y la de abajo en dólares. Para CEDEARs, el
-            dólar se calcula con el ratio real contra la acción (✓); sin ratio se aproxima con el CCL
-            general (≈) — completalo a mano debajo del ticker para el número exacto.
-          </div>
+          <template v-if="openPositionsOpen">
+            <div class="by-symbol-table-wrap">
+              <table class="by-symbol-table" v-if="filteredOpenPositions.length">
+                <thead>
+                  <tr>
+                    <th>Ticker</th>
+                    <th>Cantidad</th>
+                    <th title="Precio en vivo, solo CEDEARs (data912)">Precio (ARS)</th>
+                    <th title="Con ratio conocido, el USD se calcula con el precio real de la acción. Sin ratio, se aproxima con el CCL general (≈).">Valor actual</th>
+                    <th title="Con ratio conocido, el USD se calcula con el precio real de la acción. Sin ratio, se aproxima con el CCL general (≈).">Rendimiento</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="p in filteredOpenPositions" :key="p.ticker">
+                    <td>
+                      <div class="ticker-cell">{{ p.ticker }}</div>
+                      <div v-if="p.assetType === 'CEDEAR'" class="ratio-subrow">
+                        <span>Ratio:</span>
+                        <input
+                          type="number" min="0" step="any"
+                          :value="p.ratio ?? ''"
+                          @change="setManualRatio(p.ticker, $event.target.value)"
+                          placeholder="ej: 10"
+                          class="ratio-input"
+                          title="Cantidad de CEDEARs por 1 acción"
+                        >
+                        <span v-if="p.ratio != null && cedearRatiosAuto[p.ticker] !== false" class="auto-tag">auto</span>
+                      </div>
+                    </td>
+                    <td>{{ formatNum(p.quantity) }}</td>
+                    <td>
+                      <div class="stacked-cell">
+                        <span class="stacked-line-dim">Costo ${{ formatMoney(p.avgCost) }}</span>
+                        <span>{{ p.livePrice != null ? `Actual $${formatMoney(p.livePrice)}` : 'Actual —' }}</span>
+                      </div>
+                    </td>
+                    <td>
+                      <div class="stacked-cell">
+                        <span>{{ p.marketValueARS != null ? `$${formatMoney(p.marketValueARS)}` : '—' }}</span>
+                        <span class="stacked-line-dim">
+                          <template v-if="p.marketValueUSD != null">
+                            US${{ formatMoney(p.marketValueUSD) }}
+                            <span
+                              v-if="p.assetType === 'CEDEAR'"
+                              :title="p.usesRatioValuation ? 'Valor real: calculado con ratio + precio de la acción' : 'Aproximado con el CCL general (falta ratio o precio de la acción)'"
+                            >{{ p.usesRatioValuation ? '✓' : '≈' }}</span>
+                          </template>
+                          <template v-else>—</template>
+                        </span>
+                      </div>
+                    </td>
+                    <td>
+                      <div class="stacked-cell">
+                        <span v-if="p.unrealizedARS === null">—</span>
+                        <span v-else :class="p.unrealizedARS >= 0 ? 'pl-pos' : 'pl-neg'">
+                          {{ p.unrealizedARS >= 0 ? '+' : '' }}${{ formatMoney(p.unrealizedARS) }}
+                          <span class="pct-tag">({{ formatPct(p.unrealizedARSPct) }})</span>
+                        </span>
+                        <span v-if="p.unrealizedUSD === null" class="stacked-line-dim">—</span>
+                        <span v-else class="stacked-line-dim" :class="p.unrealizedUSD >= 0 ? 'pl-pos' : 'pl-neg'">
+                          {{ p.unrealizedUSD >= 0 ? '+' : '' }}US${{ formatMoney(p.unrealizedUSD) }}
+                          <span class="pct-tag">({{ formatPct(p.unrealizedUSDPct) }})</span>
+                        </span>
+                      </div>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+              <div v-else class="empty-state">Ningún ticker coincide con "{{ openPositionsSearch }}".</div>
+            </div>
+            <div class="table-hint">
+              Precio en vivo solo para CEDEARs (fuente: data912.com, cada 30s). En "Valor actual" y
+              "Rendimiento", la línea de arriba es en pesos y la de abajo en dólares. Para CEDEARs, el
+              dólar se calcula con el ratio real contra la acción (✓); sin ratio se aproxima con el CCL
+              general (≈) — completalo a mano debajo del ticker para el número exacto.
+            </div>
+          </template>
         </div>
 
         <!-- Resumen por ticker (histórico, incluye posiciones cerradas) -->
         <div v-if="summary.bySymbol.length" class="by-symbol-section">
-          <div class="section-title">Resultado por ticker (histórico)</div>
-          <div class="by-symbol-table-wrap">
-            <table class="by-symbol-table">
+          <div class="table-header-row">
+            <button type="button" class="section-toggle" @click="bySymbolOpen = !bySymbolOpen">
+              <span class="chevron" :class="{ 'chevron-open': bySymbolOpen }">▸</span>
+              <span class="section-title">Resultado por ticker (histórico) ({{ summary.bySymbol.length }})</span>
+            </button>
+            <div v-if="bySymbolOpen" class="search-box">
+              <input
+                type="text"
+                v-model="bySymbolSearch"
+                placeholder="Buscar ticker..."
+                style="text-transform:uppercase"
+              >
+              <button v-if="bySymbolSearch" type="button" class="search-clear" @click="bySymbolSearch = ''">✕</button>
+            </div>
+          </div>
+          <div v-if="bySymbolOpen" class="by-symbol-table-wrap">
+            <table class="by-symbol-table" v-if="filteredBySymbol.length">
               <thead>
                 <tr>
                   <th>Ticker</th>
@@ -764,7 +817,7 @@ onUnmounted(() => {
                 </tr>
               </thead>
               <tbody>
-                <tr v-for="s in summary.bySymbol" :key="s.ticker">
+                <tr v-for="s in filteredBySymbol" :key="s.ticker">
                   <td>
                     <div class="ticker-cell">{{ s.ticker }}</div>
                     <span class="badge" :class="s.assetType === 'CEDEAR' ? 'badge-cedear' : 'badge-ar'">{{ s.assetType === 'CEDEAR' ? 'CEDEAR' : 'Acción AR' }}</span>
@@ -792,6 +845,7 @@ onUnmounted(() => {
                 </tr>
               </tbody>
             </table>
+            <div v-else class="empty-state">Ningún ticker coincide con "{{ bySymbolSearch }}".</div>
           </div>
         </div>
 
@@ -889,14 +943,14 @@ onUnmounted(() => {
   border: 1px solid var(--border);
   border-radius: 14px;
   width: 100%;
-  max-width: 1440px;
-  max-height: 96vh;
+  max-width: 1180px;
+  max-height: 90vh;
   overflow-y: auto;
-  padding: 32px 40px;
+  padding: 24px 28px;
   display: flex;
   flex-direction: column;
-  gap: 28px;
-  font-size: 15px;
+  gap: 18px;
+  font-size: 14.5px;
   line-height: 1.5;
 }
 
@@ -905,16 +959,16 @@ onUnmounted(() => {
   align-items: center;
   justify-content: space-between;
   border-bottom: 1px solid var(--border);
-  padding-bottom: 20px;
+  padding-bottom: 16px;
 }
 
 .trades-title {
-  font-size: 22px;
+  font-size: 19px;
   font-weight: 700;
   color: var(--text);
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
 }
 
 .close-btn {
@@ -953,30 +1007,51 @@ onUnmounted(() => {
 
 .summary-bar {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
-  gap: 16px;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 14px;
 }
 
 .summary-card {
   background: var(--bg);
   border: 1px solid var(--border);
-  border-radius: 12px;
-  padding: 18px 20px;
+  border-radius: 10px;
+  padding: 14px 16px;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
 }
 
 .summary-label {
-  font-size: 12px;
+  font-size: 11.5px;
   color: var(--text-dim);
-  letter-spacing: 0.2px;
 }
 
 .summary-card strong {
-  font-size: 24px;
+  font-size: 20px;
   color: var(--text);
   font-family: var(--font-num, inherit);
+}
+
+.section-toggle {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  background: none;
+  border: none;
+  padding: 4px 0;
+  cursor: pointer;
+  text-align: left;
+}
+
+.chevron {
+  display: inline-block;
+  color: var(--text-dim);
+  font-size: 12px;
+  transition: transform 0.15s ease;
+}
+
+.chevron-open {
+  transform: rotate(90deg);
 }
 
 .section-title {
@@ -1493,14 +1568,14 @@ onUnmounted(() => {
     max-width: 100%;
     height: 100vh;
     border-radius: 0;
-    padding: 22px 18px;
-    gap: 22px;
+    padding: 18px 16px;
+    gap: 16px;
   }
   .form-field-wide {
     grid-column: span 1;
   }
   .summary-card strong {
-    font-size: 20px;
+    font-size: 18px;
   }
 }
 </style>
