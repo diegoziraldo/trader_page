@@ -64,13 +64,40 @@ let intervaloUsaPrices = null
 const cedearRatios = ref({})     // { TICKER: ratio numérico }
 const cedearRatiosAuto = reactive({}) // { TICKER: true | false }
 
-// --- Tablas de resumen: plegables + búsqueda propia por ticker ---
-// Así, aunque se carguen muchos tickers, la vista no se hace inmensa: cada
-// tabla se puede colapsar y/o filtrar de forma independiente.
-const openPositionsOpen = ref(true)
+// --- Tablas de resumen: búsqueda + orden por columna, con scroll interno y ---
+// header sticky (patrón de terminal de trading) en vez de esconder toda la
+// sección. Así, aunque se carguen muchos tickers, la tabla no "se come" la
+// pantalla: se desplaza puertas adentro y el encabezado queda fijo.
 const openPositionsSearch = ref('')
-const bySymbolOpen = ref(true)
 const bySymbolSearch = ref('')
+const openPositionsSort = reactive({ key: null, dir: 'desc' })
+const bySymbolSort = reactive({ key: null, dir: 'desc' })
+
+function toggleSort(state, key) {
+  if (state.key !== key) {
+    state.key = key
+    state.dir = 'desc'
+  } else if (state.dir === 'desc') {
+    state.dir = 'asc'
+  } else {
+    state.key = null
+  }
+}
+
+function applySort(list, state) {
+  if (!state.key) return list
+  const key = state.key
+  const sorted = [...list].sort((a, b) => {
+    const va = a[key]
+    const vb = b[key]
+    if (va == null && vb == null) return 0
+    if (va == null) return 1
+    if (vb == null) return -1
+    if (typeof va === 'string') return va.localeCompare(vb)
+    return va - vb
+  })
+  return state.dir === 'asc' ? sorted : sorted.reverse()
+}
 
 // --- Autocompletado del CCL en el formulario ---
 const cclLoading = ref(false)
@@ -215,15 +242,15 @@ const openPositions = computed(() =>
 // Filtro propio de la tabla "Posiciones abiertas" (no afecta al historial).
 const filteredOpenPositions = computed(() => {
   const q = openPositionsSearch.value.trim().toUpperCase()
-  if (!q) return openPositions.value
-  return openPositions.value.filter((p) => p.ticker.toUpperCase().includes(q))
+  const base = q ? openPositions.value.filter((p) => p.ticker.toUpperCase().includes(q)) : openPositions.value
+  return applySort(base, openPositionsSort)
 })
 
 // Filtro propio de la tabla "Resultado por ticker" (no afecta al historial).
 const filteredBySymbol = computed(() => {
   const q = bySymbolSearch.value.trim().toUpperCase()
-  if (!q) return summary.value.bySymbol
-  return summary.value.bySymbol.filter((s) => s.ticker.toUpperCase().includes(q))
+  const base = q ? summary.value.bySymbol.filter((s) => s.ticker.toUpperCase().includes(q)) : summary.value.bySymbol
+  return applySort(base, bySymbolSort)
 })
 
 async function loadAll() {
@@ -696,11 +723,8 @@ onUnmounted(() => {
         <!-- Posiciones abiertas: valor de mercado y rendimiento no realizado -->
         <div v-if="openPositions.length" class="by-symbol-section">
           <div class="table-header-row">
-            <button type="button" class="section-toggle" @click="openPositionsOpen = !openPositionsOpen">
-              <span class="chevron" :class="{ 'chevron-open': openPositionsOpen }">▸</span>
-              <span class="section-title">Posiciones abiertas — valor de mercado ({{ openPositions.length }})</span>
-            </button>
-            <div v-if="openPositionsOpen" class="search-box">
+            <div class="section-title">Posiciones abiertas — valor de mercado ({{ openPositions.length }})</div>
+            <div class="search-box">
               <input
                 type="text"
                 v-model="openPositionsSearch"
@@ -710,93 +734,108 @@ onUnmounted(() => {
               <button v-if="openPositionsSearch" type="button" class="search-clear" @click="openPositionsSearch = ''">✕</button>
             </div>
           </div>
-          <template v-if="openPositionsOpen">
-            <div class="by-symbol-table-wrap">
-              <table class="by-symbol-table" v-if="filteredOpenPositions.length">
-                <thead>
-                  <tr>
-                    <th>Ticker</th>
-                    <th>Cantidad</th>
-                    <th title="Precio en vivo, solo CEDEARs (data912)">Precio (ARS)</th>
-                    <th title="Con ratio conocido, el USD se calcula con el precio real de la acción. Sin ratio, se aproxima con el CCL general (≈).">Valor actual</th>
-                    <th title="Con ratio conocido, el USD se calcula con el precio real de la acción. Sin ratio, se aproxima con el CCL general (≈).">Rendimiento</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr v-for="p in filteredOpenPositions" :key="p.ticker">
-                    <td>
-                      <div class="ticker-cell">{{ p.ticker }}</div>
-                      <div v-if="p.assetType === 'CEDEAR'" class="ratio-subrow">
-                        <span>Ratio:</span>
-                        <input
-                          type="number" min="0" step="any"
-                          :value="p.ratio ?? ''"
-                          @change="setManualRatio(p.ticker, $event.target.value)"
-                          placeholder="ej: 10"
-                          class="ratio-input"
-                          title="Cantidad de CEDEARs por 1 acción"
-                        >
-                        <span v-if="p.ratio != null && cedearRatiosAuto[p.ticker] !== false" class="auto-tag">auto</span>
-                      </div>
-                    </td>
-                    <td>{{ formatNum(p.quantity) }}</td>
-                    <td>
-                      <div class="stacked-cell">
-                        <span class="stacked-line-dim">Costo ${{ formatMoney(p.avgCost) }}</span>
-                        <span>{{ p.livePrice != null ? `Actual $${formatMoney(p.livePrice)}` : 'Actual —' }}</span>
-                      </div>
-                    </td>
-                    <td>
-                      <div class="stacked-cell">
-                        <span>{{ p.marketValueARS != null ? `$${formatMoney(p.marketValueARS)}` : '—' }}</span>
-                        <span class="stacked-line-dim">
-                          <template v-if="p.marketValueUSD != null">
-                            US${{ formatMoney(p.marketValueUSD) }}
-                            <span
-                              v-if="p.assetType === 'CEDEAR'"
-                              :title="p.usesRatioValuation ? 'Valor real: calculado con ratio + precio de la acción' : 'Aproximado con el CCL general (falta ratio o precio de la acción)'"
-                            >{{ p.usesRatioValuation ? '✓' : '≈' }}</span>
-                          </template>
-                          <template v-else>—</template>
-                        </span>
-                      </div>
-                    </td>
-                    <td>
-                      <div class="stacked-cell">
-                        <span v-if="p.unrealizedARS === null">—</span>
-                        <span v-else :class="p.unrealizedARS >= 0 ? 'pl-pos' : 'pl-neg'">
-                          {{ p.unrealizedARS >= 0 ? '+' : '' }}${{ formatMoney(p.unrealizedARS) }}
-                          <span class="pct-tag">({{ formatPct(p.unrealizedARSPct) }})</span>
-                        </span>
-                        <span v-if="p.unrealizedUSD === null" class="stacked-line-dim">—</span>
-                        <span v-else class="stacked-line-dim" :class="p.unrealizedUSD >= 0 ? 'pl-pos' : 'pl-neg'">
-                          {{ p.unrealizedUSD >= 0 ? '+' : '' }}US${{ formatMoney(p.unrealizedUSD) }}
-                          <span class="pct-tag">({{ formatPct(p.unrealizedUSDPct) }})</span>
-                        </span>
-                      </div>
-                    </td>
-                  </tr>
-                </tbody>
-              </table>
-              <div v-else class="empty-state">Ningún ticker coincide con "{{ openPositionsSearch }}".</div>
-            </div>
-            <div class="table-hint">
-              Precio en vivo solo para CEDEARs (fuente: data912.com, cada 30s). En "Valor actual" y
-              "Rendimiento", la línea de arriba es en pesos y la de abajo en dólares. Para CEDEARs, el
-              dólar se calcula con el ratio real contra la acción (✓); sin ratio se aproxima con el CCL
-              general (≈) — completalo a mano debajo del ticker para el número exacto.
-            </div>
-          </template>
+          <div class="by-symbol-table-wrap">
+            <table class="by-symbol-table" v-if="filteredOpenPositions.length">
+              <thead>
+                <tr>
+                  <th class="sortable-th" @click="toggleSort(openPositionsSort, 'ticker')">
+                    Ticker
+                    <span v-if="openPositionsSort.key === 'ticker'" class="sort-arrow">{{ openPositionsSort.dir === 'asc' ? '▲' : '▼' }}</span>
+                  </th>
+                  <th class="num sortable-th" @click="toggleSort(openPositionsSort, 'quantity')">
+                    Cantidad
+                    <span v-if="openPositionsSort.key === 'quantity'" class="sort-arrow">{{ openPositionsSort.dir === 'asc' ? '▲' : '▼' }}</span>
+                  </th>
+                  <th class="num sortable-th" title="Precio en vivo, solo CEDEARs (data912)" @click="toggleSort(openPositionsSort, 'livePrice')">
+                    Precio (ARS)
+                    <span v-if="openPositionsSort.key === 'livePrice'" class="sort-arrow">{{ openPositionsSort.dir === 'asc' ? '▲' : '▼' }}</span>
+                  </th>
+                  <th class="num sortable-th" title="Con ratio conocido, el USD se calcula con el precio real de la acción. Sin ratio, se aproxima con el CCL general (≈)." @click="toggleSort(openPositionsSort, 'marketValueARS')">
+                    Valor actual
+                    <span v-if="openPositionsSort.key === 'marketValueARS'" class="sort-arrow">{{ openPositionsSort.dir === 'asc' ? '▲' : '▼' }}</span>
+                  </th>
+                  <th class="num sortable-th" title="Con ratio conocido, el USD se calcula con el precio real de la acción. Sin ratio, se aproxima con el CCL general (≈)." @click="toggleSort(openPositionsSort, 'unrealizedARS')">
+                    Rendimiento
+                    <span v-if="openPositionsSort.key === 'unrealizedARS'" class="sort-arrow">{{ openPositionsSort.dir === 'asc' ? '▲' : '▼' }}</span>
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr
+                  v-for="p in filteredOpenPositions"
+                  :key="p.ticker"
+                  :class="p.unrealizedARS == null ? '' : (p.unrealizedARS >= 0 ? 'row-pos' : 'row-neg')"
+                >
+                  <td>
+                    <div class="ticker-cell">{{ p.ticker }}</div>
+                    <div v-if="p.assetType === 'CEDEAR'" class="ratio-subrow">
+                      <span>Ratio:</span>
+                      <input
+                        type="number" min="0" step="any"
+                        :value="p.ratio ?? ''"
+                        @change="setManualRatio(p.ticker, $event.target.value)"
+                        placeholder="ej: 10"
+                        class="ratio-input"
+                        title="Cantidad de CEDEARs por 1 acción"
+                      >
+                      <span v-if="p.ratio != null && cedearRatiosAuto[p.ticker] !== false" class="auto-tag">auto</span>
+                    </div>
+                  </td>
+                  <td class="num">{{ formatNum(p.quantity) }}</td>
+                  <td class="num">
+                    <div class="stacked-cell">
+                      <span class="stacked-line-dim">Costo ${{ formatMoney(p.avgCost) }}</span>
+                      <span>{{ p.livePrice != null ? `Actual $${formatMoney(p.livePrice)}` : 'Actual —' }}</span>
+                    </div>
+                  </td>
+                  <td class="num">
+                    <div class="stacked-cell">
+                      <span>{{ p.marketValueARS != null ? `$${formatMoney(p.marketValueARS)}` : '—' }}</span>
+                      <span class="stacked-line-dim">
+                        <template v-if="p.marketValueUSD != null">
+                          US${{ formatMoney(p.marketValueUSD) }}
+                          <span
+                            v-if="p.assetType === 'CEDEAR'"
+                            :title="p.usesRatioValuation ? 'Valor real: calculado con ratio + precio de la acción' : 'Aproximado con el CCL general (falta ratio o precio de la acción)'"
+                          >{{ p.usesRatioValuation ? '✓' : '≈' }}</span>
+                        </template>
+                        <template v-else>—</template>
+                      </span>
+                    </div>
+                  </td>
+                  <td class="num">
+                    <div class="stacked-cell">
+                      <span v-if="p.unrealizedARS === null">—</span>
+                      <span v-else :class="p.unrealizedARS >= 0 ? 'pl-pos' : 'pl-neg'">
+                        {{ p.unrealizedARS >= 0 ? '+' : '' }}${{ formatMoney(p.unrealizedARS) }}
+                        <span class="pct-tag">({{ formatPct(p.unrealizedARSPct) }})</span>
+                      </span>
+                      <span v-if="p.unrealizedUSD === null" class="stacked-line-dim">—</span>
+                      <span v-else class="stacked-line-dim" :class="p.unrealizedUSD >= 0 ? 'pl-pos' : 'pl-neg'">
+                        {{ p.unrealizedUSD >= 0 ? '+' : '' }}US${{ formatMoney(p.unrealizedUSD) }}
+                        <span class="pct-tag">({{ formatPct(p.unrealizedUSDPct) }})</span>
+                      </span>
+                    </div>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+            <div v-else class="empty-state">Ningún ticker coincide con "{{ openPositionsSearch }}".</div>
+          </div>
+          <div class="table-hint">
+            Precio en vivo solo para CEDEARs (fuente: data912.com, cada 30s). En "Valor actual" y
+            "Rendimiento", la línea de arriba es en pesos y la de abajo en dólares. Para CEDEARs, el
+            dólar se calcula con el ratio real contra la acción (✓); sin ratio se aproxima con el CCL
+            general (≈) — completalo a mano debajo del ticker para el número exacto. Hacé click en un
+            encabezado para ordenar.
+          </div>
         </div>
 
         <!-- Resumen por ticker (histórico, incluye posiciones cerradas) -->
         <div v-if="summary.bySymbol.length" class="by-symbol-section">
           <div class="table-header-row">
-            <button type="button" class="section-toggle" @click="bySymbolOpen = !bySymbolOpen">
-              <span class="chevron" :class="{ 'chevron-open': bySymbolOpen }">▸</span>
-              <span class="section-title">Resultado por ticker (histórico) ({{ summary.bySymbol.length }})</span>
-            </button>
-            <div v-if="bySymbolOpen" class="search-box">
+            <div class="section-title">Resultado por ticker (histórico) ({{ summary.bySymbol.length }})</div>
+            <div class="search-box">
               <input
                 type="text"
                 v-model="bySymbolSearch"
@@ -806,24 +845,40 @@ onUnmounted(() => {
               <button v-if="bySymbolSearch" type="button" class="search-clear" @click="bySymbolSearch = ''">✕</button>
             </div>
           </div>
-          <div v-if="bySymbolOpen" class="by-symbol-table-wrap">
+          <div class="by-symbol-table-wrap">
             <table class="by-symbol-table" v-if="filteredBySymbol.length">
               <thead>
                 <tr>
-                  <th>Ticker</th>
-                  <th>Cantidad</th>
-                  <th>Costo promedio</th>
-                  <th>P&L realizado</th>
+                  <th class="sortable-th" @click="toggleSort(bySymbolSort, 'ticker')">
+                    Ticker
+                    <span v-if="bySymbolSort.key === 'ticker'" class="sort-arrow">{{ bySymbolSort.dir === 'asc' ? '▲' : '▼' }}</span>
+                  </th>
+                  <th class="num sortable-th" @click="toggleSort(bySymbolSort, 'quantity')">
+                    Cantidad
+                    <span v-if="bySymbolSort.key === 'quantity'" class="sort-arrow">{{ bySymbolSort.dir === 'asc' ? '▲' : '▼' }}</span>
+                  </th>
+                  <th class="num sortable-th" @click="toggleSort(bySymbolSort, 'avgCost')">
+                    Costo promedio
+                    <span v-if="bySymbolSort.key === 'avgCost'" class="sort-arrow">{{ bySymbolSort.dir === 'asc' ? '▲' : '▼' }}</span>
+                  </th>
+                  <th class="num sortable-th" @click="toggleSort(bySymbolSort, 'realizedPL')">
+                    P&L realizado
+                    <span v-if="bySymbolSort.key === 'realizedPL'" class="sort-arrow">{{ bySymbolSort.dir === 'asc' ? '▲' : '▼' }}</span>
+                  </th>
                 </tr>
               </thead>
               <tbody>
-                <tr v-for="s in filteredBySymbol" :key="s.ticker">
+                <tr
+                  v-for="s in filteredBySymbol"
+                  :key="s.ticker"
+                  :class="s.realizedPL >= 0 ? 'row-pos' : 'row-neg'"
+                >
                   <td>
                     <div class="ticker-cell">{{ s.ticker }}</div>
                     <span class="badge" :class="s.assetType === 'CEDEAR' ? 'badge-cedear' : 'badge-ar'">{{ s.assetType === 'CEDEAR' ? 'CEDEAR' : 'Acción AR' }}</span>
                   </td>
-                  <td>{{ formatNum(s.quantity) }}</td>
-                  <td>
+                  <td class="num">{{ formatNum(s.quantity) }}</td>
+                  <td class="num">
                     <div class="stacked-cell">
                       <span>${{ formatMoney(s.avgCost) }}</span>
                       <span class="stacked-line-dim" :title="s.usdIncomplete ? 'Faltan cargar CCL en alguna operación de este ticker' : ''">
@@ -831,7 +886,7 @@ onUnmounted(() => {
                       </span>
                     </div>
                   </td>
-                  <td>
+                  <td class="num">
                     <div class="stacked-cell">
                       <span :class="s.realizedPL >= 0 ? 'pl-pos' : 'pl-neg'">
                         {{ s.realizedPL >= 0 ? '+' : '' }}${{ formatMoney(s.realizedPL) }}
@@ -1032,26 +1087,19 @@ onUnmounted(() => {
   font-family: var(--font-num, inherit);
 }
 
-.section-toggle {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  background: none;
-  border: none;
-  padding: 4px 0;
+.sortable-th {
   cursor: pointer;
-  text-align: left;
+  user-select: none;
 }
 
-.chevron {
-  display: inline-block;
-  color: var(--text-dim);
-  font-size: 12px;
-  transition: transform 0.15s ease;
+.sortable-th:hover {
+  color: var(--text);
 }
 
-.chevron-open {
-  transform: rotate(90deg);
+.sort-arrow {
+  font-size: 9px;
+  margin-left: 5px;
+  color: var(--blue, #2563eb);
 }
 
 .section-title {
@@ -1267,7 +1315,13 @@ onUnmounted(() => {
   margin: 0;
 }
 
-.by-symbol-table-wrap,
+.by-symbol-table-wrap {
+  overflow: auto;
+  max-height: 360px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
 .trades-table-wrap {
   overflow-x: auto;
   border: 1px solid var(--border);
@@ -1278,24 +1332,36 @@ onUnmounted(() => {
 .trades-table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 14.5px;
+  font-size: 13.5px;
+  font-variant-numeric: tabular-nums;
 }
 
 .by-symbol-table th,
 .trades-table th {
   text-align: left;
-  padding: 14px 18px;
+  padding: 10px 14px;
   background: var(--bg);
   color: var(--text-dim);
   font-weight: 600;
-  font-size: 12.5px;
+  font-size: 12px;
   border-bottom: 1px solid var(--border);
   white-space: nowrap;
 }
 
+.by-symbol-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+
+.by-symbol-table th.num,
+.by-symbol-table td.num {
+  text-align: right;
+}
+
 .by-symbol-table td,
 .trades-table td {
-  padding: 14px 18px;
+  padding: 9px 14px;
   border-bottom: 1px solid var(--border);
   color: var(--text);
   white-space: nowrap;
@@ -1309,6 +1375,22 @@ onUnmounted(() => {
 
 .trades-table tbody tr:hover {
   background: var(--bg);
+}
+
+.by-symbol-table tbody tr.row-pos {
+  background: rgba(34, 197, 94, 0.055);
+}
+
+.by-symbol-table tbody tr.row-neg {
+  background: rgba(239, 68, 68, 0.055);
+}
+
+.by-symbol-table tbody tr.row-pos:hover {
+  background: rgba(34, 197, 94, 0.1);
+}
+
+.by-symbol-table tbody tr.row-neg:hover {
+  background: rgba(239, 68, 68, 0.1);
 }
 
 .table-hint {
@@ -1332,6 +1414,10 @@ onUnmounted(() => {
   flex-direction: column;
   gap: 4px;
   white-space: nowrap;
+}
+
+.by-symbol-table td.num .stacked-cell {
+  align-items: flex-end;
 }
 
 .stacked-line-dim {
