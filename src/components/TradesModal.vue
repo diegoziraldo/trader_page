@@ -171,6 +171,13 @@ const paginatedTrades = computed(() => {
   return sortedTrades.value.slice(start, start + PAGE_SIZE)
 })
 
+// Cada tarjeta necesita "cómo viene este papel" (getTradeVsCurrent, definida
+// más abajo) una sola vez por operación visible, no recalcularlo en cada
+// interpolación del template.
+const paginatedTradesWithLive = computed(() =>
+  paginatedTrades.value.map((t) => ({ ...t, vsCurrent: getTradeVsCurrent(t) }))
+)
+
 function goToPage(p) {
   currentPage.value = Math.min(Math.max(1, p), totalPages.value)
 }
@@ -365,6 +372,63 @@ async function loadLiveCedears() {
 function getLivePrice(ticker) {
   const found = liveCedears.value.find((item) => String(item.symbol).toUpperCase() === ticker)
   return found && found.c ? Number(found.c) : null
+}
+
+// =========================================================
+// CÓMO VIENE ESTE PAPEL, PARA UNA OPERACIÓN PUNTUAL
+// =========================================================
+// Igual que en "Posiciones abiertas" (que compara contra el costo promedio
+// agregado), pero acá comparamos el precio de ESA operación en particular
+// contra el precio actual. Para compras es directamente el rendimiento no
+// realizado de ese lote; para ventas es solo informativo (cómo se movió el
+// papel después de que lo vendiste, no es plata que tengas).
+function getTradeVsCurrent(t) {
+  const isCedear = t.assetType === 'CEDEAR'
+  const livePrice = isCedear ? getLivePrice(t.ticker) : null
+  if (livePrice == null || !t.price) return { available: false }
+
+  const pctChange = ((livePrice - t.price) / t.price) * 100
+  const currentValueARS = t.quantity * livePrice
+
+  if (t.operation === 'VENTA') {
+    return { available: true, isSale: true, livePrice, pctChange }
+  }
+
+  // Costo real de esta compra puntual (incluye comisión).
+  const costBasisARS = t.total
+  const gainARS = currentValueARS - costBasisARS
+  const gainARSPct = costBasisARS > 0 ? (gainARS / costBasisARS) * 100 : null
+
+  // Mismo criterio que en Posiciones abiertas: para CEDEARs, valuar en USD
+  // con el ratio real + precio de la acción, no con el CCL general.
+  const ratio = isCedear ? getRatio(t.ticker) : null
+  const underlyingPriceUSD = isCedear ? getUnderlyingPriceUSD(t.ticker) : null
+  const usesRatioValuation = isCedear && ratio != null && underlyingPriceUSD != null
+
+  let currentValueUSD = null
+  if (usesRatioValuation) {
+    currentValueUSD = (t.quantity / ratio) * underlyingPriceUSD
+  } else if (cclActual.value) {
+    currentValueUSD = currentValueARS / cclActual.value
+  }
+
+  const costBasisUSD = t.priceUSD != null ? t.quantity * t.priceUSD : null
+  const gainUSD = currentValueUSD != null && costBasisUSD != null ? currentValueUSD - costBasisUSD : null
+  const gainUSDPct = gainUSD != null && costBasisUSD > 0 ? (gainUSD / costBasisUSD) * 100 : null
+
+  return {
+    available: true,
+    isSale: false,
+    livePrice,
+    pctChange,
+    currentValueARS,
+    gainARS,
+    gainARSPct,
+    currentValueUSD,
+    gainUSD,
+    gainUSDPct,
+    usesRatioValuation,
+  }
 }
 
 // =========================================================
@@ -661,7 +725,7 @@ onUnmounted(() => {
           </div>
 
           <div v-else class="entry-cards">
-            <div v-for="t in paginatedTrades" :key="t.id" class="entry-card">
+            <div v-for="t in paginatedTradesWithLive" :key="t.id" class="entry-card">
               <div class="entry-card-header">
                 <div class="entry-card-title">
                   <span class="ticker-cell">{{ t.ticker }}</span>
@@ -701,6 +765,43 @@ onUnmounted(() => {
                   <span class="detail-label">Total operación</span>
                   <span class="detail-value">${{ formatMoney(t.total) }}</span>
                 </div>
+              </div>
+
+              <!-- Cómo viene este papel hoy, en relación a esta operación puntual -->
+              <div class="vs-current-row">
+                <template v-if="t.vsCurrent.available">
+                  <template v-if="t.vsCurrent.isSale">
+                    <span class="vs-current-label">Desde que la vendiste, cotiza</span>
+                    <span class="vs-current-price">${{ formatMoney(t.vsCurrent.livePrice) }}</span>
+                    <span class="pct-tag" :class="t.vsCurrent.pctChange >= 0 ? 'pl-pos' : 'pl-neg'">
+                      ({{ t.vsCurrent.pctChange >= 0 ? '+' : '' }}{{ formatPct(t.vsCurrent.pctChange) }})
+                    </span>
+                    <span class="vs-current-note">— no es tu ganancia/pérdida, ya no la tenés</span>
+                  </template>
+                  <template v-else>
+                    <span class="vs-current-label">Hoy cotiza</span>
+                    <span class="vs-current-price">${{ formatMoney(t.vsCurrent.livePrice) }}</span>
+                    <span class="pct-tag" :class="t.vsCurrent.pctChange >= 0 ? 'pl-pos' : 'pl-neg'">
+                      ({{ t.vsCurrent.pctChange >= 0 ? '+' : '' }}{{ formatPct(t.vsCurrent.pctChange) }})
+                    </span>
+                    <span class="vs-current-sep">·</span>
+                    <span :class="t.vsCurrent.gainARS >= 0 ? 'pl-pos' : 'pl-neg'">
+                      {{ t.vsCurrent.gainARS >= 0 ? '+' : '' }}${{ formatMoney(t.vsCurrent.gainARS) }}
+                    </span>
+                    <template v-if="t.vsCurrent.gainUSD != null">
+                      <span class="vs-current-sep">/</span>
+                      <span
+                        class="stacked-line-dim"
+                        :class="t.vsCurrent.gainUSD >= 0 ? 'pl-pos' : 'pl-neg'"
+                        :title="t.vsCurrent.usesRatioValuation ? 'Calculado con ratio + precio real de la acción' : 'Aproximado con el CCL general'"
+                      >
+                        {{ t.vsCurrent.gainUSD >= 0 ? '+' : '' }}US${{ formatMoney(t.vsCurrent.gainUSD) }}
+                        {{ t.vsCurrent.usesRatioValuation ? '✓' : '≈' }}
+                      </span>
+                    </template>
+                  </template>
+                </template>
+                <span v-else class="vs-current-label">Sin cotización en vivo disponible para este papel.</span>
               </div>
 
               <div class="entry-card-notes">
@@ -1285,6 +1386,38 @@ onUnmounted(() => {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
   gap: 14px;
+}
+
+.vs-current-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 7px;
+  padding: 10px 14px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 13.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.vs-current-label {
+  color: var(--text-dim);
+}
+
+.vs-current-price {
+  font-weight: 700;
+  color: var(--text);
+  font-family: var(--font-num, inherit);
+}
+
+.vs-current-sep {
+  color: var(--text-dim);
+}
+
+.vs-current-note {
+  color: var(--text-dim);
+  font-size: 12px;
 }
 
 .detail-item {
