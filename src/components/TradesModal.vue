@@ -229,6 +229,12 @@ const openPositions = computed(() =>
       const unrealizedUSDPct =
         unrealizedUSD != null && s.investedUSD > 0 ? (unrealizedUSD / s.investedUSD) * 100 : null
 
+      // Cuánto tardaste en generar esa ganancia/pérdida: antigüedad promedio
+      // ponderada por cantidad, contemplando todas las compras de este ticker.
+      const holding = getAvgHoldingDays(s.ticker)
+      const holdingDays = holding ? holding.days : null
+      const holdingLots = holding ? holding.lots : 0
+
       return {
         ...s,
         livePrice,
@@ -242,6 +248,8 @@ const openPositions = computed(() =>
         marketValueUSD,
         unrealizedUSD,
         unrealizedUSDPct,
+        holdingDays,
+        holdingLots,
       }
     })
 )
@@ -375,6 +383,48 @@ function getLivePrice(ticker) {
 }
 
 // =========================================================
+// DÍAS TRANSCURRIDOS (para saber cuánto tardaste en hacer la ganancia)
+// =========================================================
+// Comparamos por fecha calendario (no por hora exacta) para evitar que un
+// desfasaje de husos horarios sume o reste un día de más.
+function daysSince(dateStr) {
+  if (!dateStr) return null
+  const then = new Date(dateStr)
+  if (Number.isNaN(then.getTime())) return null
+  const startOfThen = Date.UTC(then.getUTCFullYear(), then.getUTCMonth(), then.getUTCDate())
+  const now = new Date()
+  const startOfNow = Date.UTC(now.getFullYear(), now.getMonth(), now.getDate())
+  return Math.max(0, Math.round((startOfNow - startOfThen) / 86_400_000))
+}
+
+function formatDays(n) {
+  if (n == null) return '—'
+  if (n === 0) return 'hoy'
+  if (n === 1) return '1 día'
+  return `${n} días`
+}
+
+// Antigüedad de una posición abierta: como puede estar armada con varias
+// compras en fechas distintas, usamos el promedio ponderado por cantidad
+// (mismo criterio que el costo promedio) en vez de una sola fecha. Si hubo
+// ventas parciales no sabemos qué lote puntual quedó (no hay tracking FIFO),
+// así que esto es una aproximación razonable, no un dato exacto.
+function getAvgHoldingDays(ticker) {
+  const buys = trades.value.filter((t) => t.ticker === ticker && t.operation === 'COMPRA' && t.quantity > 0)
+  if (!buys.length) return null
+  let totalQty = 0
+  let weightedDays = 0
+  for (const b of buys) {
+    const d = daysSince(b.date)
+    if (d == null) continue
+    totalQty += b.quantity
+    weightedDays += d * b.quantity
+  }
+  if (totalQty <= 0) return null
+  return { days: Math.round(weightedDays / totalQty), lots: buys.length }
+}
+
+// =========================================================
 // CÓMO VIENE ESTE PAPEL, PARA UNA OPERACIÓN PUNTUAL
 // =========================================================
 // Igual que en "Posiciones abiertas" (que compara contra el costo promedio
@@ -385,13 +435,15 @@ function getLivePrice(ticker) {
 function getTradeVsCurrent(t) {
   const isCedear = t.assetType === 'CEDEAR'
   const livePrice = isCedear ? getLivePrice(t.ticker) : null
-  if (livePrice == null || !t.price) return { available: false }
+  const daysElapsed = daysSince(t.date)
+
+  if (livePrice == null || !t.price) return { available: false, daysElapsed }
 
   const pctChange = ((livePrice - t.price) / t.price) * 100
   const currentValueARS = t.quantity * livePrice
 
   if (t.operation === 'VENTA') {
-    return { available: true, isSale: true, livePrice, pctChange }
+    return { available: true, isSale: true, livePrice, pctChange, daysElapsed }
   }
 
   // Costo real de esta compra puntual (incluye comisión).
@@ -428,6 +480,7 @@ function getTradeVsCurrent(t) {
     gainUSD,
     gainUSDPct,
     usesRatioValuation,
+    daysElapsed,
   }
 }
 
@@ -771,7 +824,9 @@ onUnmounted(() => {
               <div class="vs-current-row">
                 <template v-if="t.vsCurrent.available">
                   <template v-if="t.vsCurrent.isSale">
-                    <span class="vs-current-label">Desde que la vendiste, cotiza</span>
+                    <span class="vs-current-days" title="Días desde la fecha de esta venta hasta hoy">Hace {{ formatDays(t.vsCurrent.daysElapsed) }}</span>
+                    <span class="vs-current-sep">·</span>
+                    <span class="vs-current-label">desde que la vendiste, cotiza</span>
                     <span class="vs-current-price">${{ formatMoney(t.vsCurrent.livePrice) }}</span>
                     <span class="pct-tag" :class="t.vsCurrent.pctChange >= 0 ? 'pl-pos' : 'pl-neg'">
                       ({{ t.vsCurrent.pctChange >= 0 ? '+' : '' }}{{ formatPct(t.vsCurrent.pctChange) }})
@@ -779,7 +834,9 @@ onUnmounted(() => {
                     <span class="vs-current-note">— no es tu ganancia/pérdida, ya no la tenés</span>
                   </template>
                   <template v-else>
-                    <span class="vs-current-label">Hoy cotiza</span>
+                    <span class="vs-current-days" title="Días desde la fecha de esta compra hasta hoy">Hace {{ formatDays(t.vsCurrent.daysElapsed) }}</span>
+                    <span class="vs-current-sep">·</span>
+                    <span class="vs-current-label">hoy cotiza</span>
                     <span class="vs-current-price">${{ formatMoney(t.vsCurrent.livePrice) }}</span>
                     <span class="pct-tag" :class="t.vsCurrent.pctChange >= 0 ? 'pl-pos' : 'pl-neg'">
                       ({{ t.vsCurrent.pctChange >= 0 ? '+' : '' }}{{ formatPct(t.vsCurrent.pctChange) }})
@@ -801,7 +858,11 @@ onUnmounted(() => {
                     </template>
                   </template>
                 </template>
-                <span v-else class="vs-current-label">Sin cotización en vivo disponible para este papel.</span>
+                <template v-else>
+                  <span class="vs-current-days">Hace {{ formatDays(t.vsCurrent.daysElapsed) }}</span>
+                  <span class="vs-current-sep">·</span>
+                  <span class="vs-current-label">sin cotización en vivo disponible para este papel.</span>
+                </template>
               </div>
 
               <div class="entry-card-notes">
@@ -940,6 +1001,10 @@ onUnmounted(() => {
                 >
                   <td>
                     <div class="ticker-cell">{{ p.ticker }}</div>
+                    <div v-if="p.holdingDays != null" class="ratio-subrow" :title="p.holdingLots > 1 ? `Promedio ponderado por cantidad entre ${p.holdingLots} compras. No contempla ventas parciales (sin tracking de lotes).` : ''">
+                      <span>📅 Hace {{ formatDays(p.holdingDays) }}</span>
+                      <span v-if="p.holdingLots > 1" class="stacked-line-dim">(promedio, {{ p.holdingLots }} compras)</span>
+                    </div>
                     <div v-if="p.assetType === 'CEDEAR'" class="ratio-subrow">
                       <span>Ratio:</span>
                       <input
@@ -1408,6 +1473,12 @@ onUnmounted(() => {
 .vs-current-price {
   font-weight: 700;
   color: var(--text);
+  font-family: var(--font-num, inherit);
+}
+
+.vs-current-days {
+  font-weight: 700;
+  color: var(--blue, #2563eb);
   font-family: var(--font-num, inherit);
 }
 
