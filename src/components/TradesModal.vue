@@ -5,59 +5,46 @@ import {
   getTradesSummary,
   createTrade,
   updateTrade,
-  deleteTrade
+  deleteTrade,
 } from '../services/tradesService'
 
 const emit = defineEmits(['close'])
 
+// =========================================================
+// CONFIGURACIÓN — mismas fuentes públicas que usa CclCalculator.vue
+// =========================================================
 const DOLARAPI_LIST_URL = 'https://dolarapi.com/v1/dolares'
-const CCL_REFRESH_MS = 60000
-
+const CCL_REFRESH_MS = 60_000
 const CEDEARS_LIVE_URL = 'https://data912.com/live/arg_cedears'
-const CEDEARS_REFRESH_MS = 30000
-
-const HISTORICAL_CCL_BASE =
-  'https://api.argentinadatos.com/v1/cotizaciones/dolares/contadoconliqui'
-
-const USA_STOCKS_LIVE_URL = 'https://data912.com/live/usa_stocks'
-const USA_ADRS_LIVE_URL = 'https://data912.com/live/usa_adrs'
-const USA_PRICES_REFRESH_MS = 60000
-
-const CEDEAR_RATIOS_URL =
-  'https://ferminrp.github.io/google-sheets-argento/api/cedears.json'
+const CEDEARS_REFRESH_MS = 30_000
+// api.argentinadatos.com expone el CCL histórico día por día, así no hay
+// que tipearlo a mano para operaciones viejas.
+const HISTORICAL_CCL_BASE = 'https://api.argentinadatos.com/v1/cotizaciones/dolares/contadoconliqui'
 
 const trades = ref([])
 const summary = ref({
   bySymbol: [],
   totals: {
-    realizedPL: 0,
-    realizedPLUSD: 0,
-    invested: 0,
-    investedUSD: 0,
-    openPositions: 0,
-    totalTrades: 0
-  }
+    realizedPL: 0, realizedPLUSD: 0, invested: 0, investedUSD: 0,
+    openPositions: 0, totalTrades: 0,
+  },
 })
-
-const loading = ref(false)
+const loading = ref(true)
 const errorMsg = ref('')
 const saving = ref(false)
 
-const editingId = ref(null)
-const viewMode = ref('form')
+const editingId = ref(null) // null = modo "agregar", si no, id del trade en edición
+const viewMode = ref('form') // 'form' = cargar/editar, 'list' = ver todo el detalle
 
+// --- Dólar CCL en vivo (para "hoy" y para valuar posiciones abiertas) ---
 const cclActual = ref(null)
-const cclInterval = ref(null)
+let intervaloCclActual = null
 
+// --- Precios de CEDEARs en vivo (data912) ---
 const liveCedears = ref([])
-const cedearInterval = ref(null)
+let intervaloCedears = null
 
-const usaPrices = ref([])
-const usaPricesInterval = ref(null)
-
-const cedearRatios = ref({})
-const cedearRatiosAuto = ref({})
-
+// --- Autocompletado del CCL en el formulario ---
 const cclLoading = ref(false)
 const cclIsAuto = ref(false)
 const cclMsg = ref('')
@@ -76,50 +63,35 @@ function emptyForm() {
     price: '',
     fee: '',
     ccl: '',
-    notes: ''
+    ratio: 1,
+    notes: '',
   }
 }
 
 const form = reactive(emptyForm())
+const formError = ref('')
 
-function formatMoney(value, decimals = 2) {
-  const n = Number(value)
-  if (!Number.isFinite(n)) return '-'
-
-  return n.toLocaleString('es-AR', {
-    minimumFractionDigits: decimals,
-    maximumFractionDigits: decimals
-  })
+function formatMoney(n) {
+  if (n === null || n === undefined || n === '') return '—'
+  const num = Number(n) || 0
+  return num.toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 }
 
-function formatNum(value, decimals = 2) {
-  const n = Number(value)
-  if (!Number.isFinite(n)) return '-'
-
-  return n.toLocaleString('es-AR', {
-    minimumFractionDigits: decimals,
-    maximumFractionDigits: decimals
-  })
+function formatNum(n, maxDigits = 4) {
+  if (n === null || n === undefined || n === '') return '—'
+  return Number(n).toLocaleString('es-AR', { maximumFractionDigits: maxDigits })
 }
 
-function formatPct(value, decimals = 2) {
-  const n = Number(value)
-  if (!Number.isFinite(n)) return '-'
-
-  return `${n.toLocaleString('es-AR', {
-    minimumFractionDigits: decimals,
-    maximumFractionDigits: decimals
-  })}%`
+function formatPct(n) {
+  if (n === null || n === undefined) return '—'
+  const sign = n >= 0 ? '+' : ''
+  return `${sign}${n.toFixed(2)}%`
 }
 
-function formatDate(value) {
-  if (!value) return '-'
-
-  const d = new Date(value + 'T00:00:00')
-
-  if (Number.isNaN(d.getTime())) return value
-
-  return d.toLocaleDateString('es-AR')
+function formatDate(d) {
+  if (!d) return '—'
+  const [y, m, day] = d.split('-')
+  return `${day}/${m}/${y}`
 }
 
 const searchQuery = ref('')
@@ -127,162 +99,75 @@ const currentPage = ref(1)
 const PAGE_SIZE = 10
 
 const filteredTrades = computed(() => {
-  const q = searchQuery.value.trim().toLowerCase()
-
+  const q = searchQuery.value.trim().toUpperCase()
   if (!q) return trades.value
-
-  return trades.value.filter(trade => {
-    return [
-      trade.ticker,
-      trade.assetType,
-      trade.operation,
-      trade.notes,
-      trade.date
-    ]
-      .filter(Boolean)
-      .some(value => String(value).toLowerCase().includes(q))
-  })
+  return trades.value.filter((t) => t.ticker.toUpperCase().includes(q))
 })
 
-const sortedTrades = computed(() => {
-  return [...filteredTrades.value].sort((a, b) => {
-    const dateA = new Date(a.date || 0).getTime()
-    const dateB = new Date(b.date || 0).getTime()
+const sortedTrades = computed(() =>
+  [...filteredTrades.value].sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : b.id - a.id))
+)
 
-    if (dateA !== dateB) return dateB - dateA
-
-    return Number(b.id || 0) - Number(a.id || 0)
-  })
-})
-
-const totalPages = computed(() => {
-  return Math.max(1, Math.ceil(sortedTrades.value.length / PAGE_SIZE))
-})
+// Paginación: 10 por página sobre el resultado ya buscado, así el buscador
+// siempre encuentra en TODO el historial, no solo en la página visible.
+const totalPages = computed(() => Math.max(1, Math.ceil(sortedTrades.value.length / PAGE_SIZE)))
 
 const paginatedTrades = computed(() => {
   const start = (currentPage.value - 1) * PAGE_SIZE
-
   return sortedTrades.value.slice(start, start + PAGE_SIZE)
 })
 
-function goToPage(page) {
-  const p = Math.min(Math.max(1, page), totalPages.value)
-  currentPage.value = p
+function goToPage(p) {
+  currentPage.value = Math.min(Math.max(1, p), totalPages.value)
 }
 
 watch(searchQuery, () => {
   currentPage.value = 1
 })
 
-watch(totalPages, value => {
-  if (currentPage.value > value) {
-    currentPage.value = value
-  }
-})
+// Posiciones abiertas con valor de mercado y rendimiento no realizado, en
+// ARS y en USD — como muestran los brokers en su panel de "cartera".
+const openPositions = computed(() =>
+  summary.value.bySymbol
+    .filter((s) => s.quantity > 0)
+    .map((s) => {
+      const livePrice = s.assetType === 'CEDEAR' ? getLivePrice(s.ticker) : null
+      const marketValueARS = livePrice != null ? s.quantity * livePrice : null
+      const unrealizedARS = marketValueARS != null ? marketValueARS - s.invested : null
+      const unrealizedARSPct =
+        marketValueARS != null && s.invested > 0 ? (unrealizedARS / s.invested) * 100 : null
 
-const openPositions = computed(() => {
-  const rows = summary.value?.bySymbol || []
-
-  return rows
-    .filter(row => Number(row.quantity || 0) > 0)
-    .map(row => {
-      const ticker = String(row.ticker || '').toUpperCase()
-      const quantity = Number(row.quantity || 0)
-      const avgCost = Number(row.avgCost || row.averageCost || 0)
-
-      const currentPriceARS =
-        getLivePrice(ticker) ??
-        Number(row.currentPrice || row.price || 0)
-
-      const marketValueARS = quantity * currentPriceARS
-      const investedARS = quantity * avgCost
-      const unrealizedARS = marketValueARS - investedARS
-
-      let currentValueUSD = 0
-      let unrealizedUSD = 0
-      let impliedCCL = null
-
-      if (row.assetType === 'CEDEAR') {
-        const ratio = getCedearRatio(ticker)
-        const underlyingUSD = getUnderlyingPriceUSD(ticker)
-
-        if (
-          ratio &&
-          Number.isFinite(ratio) &&
-          underlyingUSD &&
-          Number.isFinite(underlyingUSD)
-        ) {
-          currentValueUSD =
-            (quantity * underlyingUSD) / ratio
-
-          unrealizedUSD =
-            currentValueUSD -
-            (investedARS / (Number(form.ccl) || cclActual.value || 1))
-
-          if (underlyingUSD > 0) {
-            impliedCCL =
-              currentPriceARS * ratio / underlyingUSD
-          }
-        } else {
-          const ccl =
-            Number(form.ccl) ||
-            Number(cclActual.value) ||
-            1
-
-          currentValueUSD = marketValueARS / ccl
-          unrealizedUSD = unrealizedARS / ccl
-        }
-      } else {
-        const ccl =
-          Number(form.ccl) ||
-          Number(cclActual.value) ||
-          1
-
-        currentValueUSD = marketValueARS / ccl
-        unrealizedUSD = unrealizedARS / ccl
-      }
+      const marketValueUSD =
+        marketValueARS != null && cclActual.value ? marketValueARS / cclActual.value : null
+      const unrealizedUSD =
+        marketValueUSD != null && !s.usdIncomplete && s.investedUSD != null
+          ? marketValueUSD - s.investedUSD
+          : null
+      const unrealizedUSDPct =
+        unrealizedUSD != null && s.investedUSD > 0 ? (unrealizedUSD / s.investedUSD) * 100 : null
 
       return {
-        ...row,
-        ticker,
-        quantity,
-        avgCost,
-        currentPriceARS,
+        ...s,
+        livePrice,
         marketValueARS,
         unrealizedARS,
-        currentValueUSD,
+        unrealizedARSPct,
+        marketValueUSD,
         unrealizedUSD,
-        impliedCCL
+        unrealizedUSDPct,
       }
     })
-})
+)
 
 async function loadAll() {
   loading.value = true
   errorMsg.value = ''
-
   try {
-    const [tradesData, summaryData] = await Promise.all([
-      getTrades(),
-      getTradesSummary()
-    ])
-
-    trades.value = Array.isArray(tradesData) ? tradesData : []
-
-    summary.value = summaryData || {
-      bySymbol: [],
-      totals: {
-        realizedPL: 0,
-        realizedPLUSD: 0,
-        invested: 0,
-        investedUSD: 0,
-        openPositions: 0,
-        totalTrades: 0
-      }
-    }
-  } catch (error) {
-    console.error(error)
-    errorMsg.value = 'No se pudieron cargar los trades.'
+    const [t, s] = await Promise.all([getTrades(), getTradesSummary()])
+    trades.value = t
+    summary.value = s
+  } catch (e) {
+    errorMsg.value = e.message
   } finally {
     loading.value = false
   }
@@ -291,117 +176,62 @@ async function loadAll() {
 async function refreshSummary() {
   try {
     summary.value = await getTradesSummary()
-  } catch (error) {
-    console.error(error)
+  } catch (e) {
+    console.error('Error refrescando el resumen', e)
   }
 }
 
+// =========================================================
+// DÓLAR CCL — en vivo (dolarapi) e histórico (argentinadatos)
+// =========================================================
 async function fetchLiveCCL() {
-  cclLoading.value = true
-  cclMsg.value = ''
-
-  try {
-    const response = await fetch(DOLARAPI_LIST_URL)
-
-    if (!response.ok) {
-      throw new Error('Error obteniendo dólares')
-    }
-
-    const data = await response.json()
-
-    const ccl = Array.isArray(data)
-      ? data.find(item =>
-          String(item.nombre || item.casa || '')
-            .toLowerCase()
-            .includes('contado con liqui')
-        )
-      : null
-
-    if (!ccl) {
-      throw new Error('No se encontró CCL')
-    }
-
-    const value =
-      Number(ccl.venta) ||
-      Number(ccl.compra) ||
-      null
-
-    if (value) {
-      cclActual.value = value
-      cclIsAuto.value = true
-
-      if (!editingId.value && !form.ccl) {
-        form.ccl = value
-      }
-    }
-  } catch (error) {
-    console.error(error)
-    cclMsg.value = 'No se pudo actualizar el CCL.'
-  } finally {
-    cclLoading.value = false
-  }
+  const res = await fetch(DOLARAPI_LIST_URL)
+  if (!res.ok) throw new Error('No se pudo consultar dolarapi')
+  const lista = await res.json()
+  const ccl = lista.find((d) => d.casa === 'contadoconliqui')
+  return ccl && ccl.venta ? Number(ccl.venta) : null
 }
 
-async function fetchHistoricalCCL(date) {
-  if (!date) return null
-
-  try {
-    const response = await fetch(
-      `${HISTORICAL_CCL_BASE}/${date}`
-    )
-
-    if (!response.ok) return null
-
-    const data = await response.json()
-
-    if (typeof data === 'number') return data
-
-    if (Array.isArray(data) && data.length) {
-      return Number(
-        data[data.length - 1]?.valor ||
-        data[data.length - 1]?.venta ||
-        data[data.length - 1]?.value ||
-        0
-      ) || null
-    }
-
-    return Number(
-      data?.valor ||
-      data?.venta ||
-      data?.value ||
-      0
-    ) || null
-  } catch (error) {
-    console.error(error)
-    return null
-  }
+async function fetchHistoricalCCL(dateStr) {
+  if (!dateStr) return null
+  const [y, m, d] = dateStr.split('-')
+  const res = await fetch(`${HISTORICAL_CCL_BASE}/${y}/${m}/${d}`)
+  if (!res.ok) return null // fin de semana / feriado / fecha sin dato
+  const data = await res.json()
+  const row = Array.isArray(data) ? data[0] : data
+  return row && row.venta ? Number(row.venta) : null
 }
 
 async function refreshLiveCCL() {
-  await fetchLiveCCL()
+  try {
+    const value = await fetchLiveCCL()
+    if (value) cclActual.value = value
+  } catch (e) {
+    console.error('No se pudo actualizar el CCL en vivo', e)
+  }
 }
 
+// Autocompleta el campo CCL del formulario: usa el valor en vivo si la
+// fecha es hoy, o el histórico de argentinadatos si es una fecha pasada.
+// Si el usuario ya lo editó a mano, no lo pisa hasta que cambie la fecha.
 async function autofillCCL() {
-  if (!form.date) return
-
+  if (!cclIsAuto.value) return
   cclLoading.value = true
   cclMsg.value = ''
-
   try {
-    const historical = await fetchHistoricalCCL(form.date)
-
-    if (historical) {
-      form.ccl = historical
-      cclIsAuto.value = true
-      cclMsg.value = 'CCL histórico cargado.'
-      return
-    }
-
+    let value = null
     if (form.date === todayISO()) {
-      await fetchLiveCCL()
+      value = cclActual.value ?? (await fetchLiveCCL())
     } else {
-      cclMsg.value = 'No se encontró CCL histórico para esa fecha.'
+      value = await fetchHistoricalCCL(form.date)
     }
+    if (value) {
+      form.ccl = value
+    } else {
+      cclMsg.value = 'No hay cotización para esa fecha (fin de semana/feriado). Cargala a mano.'
+    }
+  } catch (e) {
+    cclMsg.value = 'No se pudo traer el CCL automáticamente. Cargalo a mano.'
   } finally {
     cclLoading.value = false
   }
@@ -412,288 +242,118 @@ function onCclManualInput() {
   cclMsg.value = ''
 }
 
-async function refetchCCL() {
-  await autofillCCL()
+function refetchCCL() {
+  cclIsAuto.value = true
+  autofillCCL()
 }
 
 watch(
   () => form.date,
-  async newDate => {
-    if (!newDate) return
-
-    if (!editingId.value) {
-      await autofillCCL()
-    }
+  () => {
+    cclIsAuto.value = true
+    autofillCCL()
   }
 )
 
+// =========================================================
+// PRECIOS DE CEDEARs EN VIVO (data912.com, sin API key)
+// =========================================================
 async function loadLiveCedears() {
   try {
-    const response = await fetch(CEDEARS_LIVE_URL)
-
-    if (!response.ok) {
-      throw new Error('Error obteniendo CEDEARs')
-    }
-
-    const data = await response.json()
-
-    liveCedears.value = Array.isArray(data) ? data : []
-  } catch (error) {
-    console.error(error)
+    const res = await fetch(CEDEARS_LIVE_URL)
+    if (!res.ok) throw new Error('Error consultando data912')
+    liveCedears.value = await res.json()
+  } catch (e) {
+    console.error('No se pudo cargar el precio en vivo de CEDEARs', e)
   }
 }
 
 function getLivePrice(ticker) {
-  const symbol = String(ticker || '').toUpperCase()
-
-  const item = liveCedears.value.find(item => {
-    return String(
-      item.symbol ||
-      item.ticker ||
-      item.especie ||
-      item.name ||
-      ''
-    ).toUpperCase() === symbol
-  })
-
-  if (!item) return null
-
-  return (
-    Number(item.price) ||
-    Number(item.last) ||
-    Number(item.ultimo) ||
-    Number(item.px) ||
-    null
-  )
+  const found = liveCedears.value.find((item) => String(item.symbol).toUpperCase() === ticker)
+  return found && found.c ? Number(found.c) : null
 }
 
-async function loadUSAPrices() {
-  try {
-    const [stocksResponse, adrsResponse] = await Promise.all([
-      fetch(USA_STOCKS_LIVE_URL),
-      fetch(USA_ADRS_LIVE_URL)
-    ])
-
-    const stocks = stocksResponse.ok
-      ? await stocksResponse.json()
-      : []
-
-    const adrs = adrsResponse.ok
-      ? await adrsResponse.json()
-      : []
-
-    usaPrices.value = [
-      ...(Array.isArray(stocks) ? stocks : []),
-      ...(Array.isArray(adrs) ? adrs : [])
-    ]
-  } catch (error) {
-    console.error(error)
-  }
-}
-
-function getUnderlyingPriceUSD(ticker) {
-  const symbol = String(ticker || '').toUpperCase()
-
-  const item = usaPrices.value.find(item => {
-    return String(
-      item.symbol ||
-      item.ticker ||
-      item.name ||
-      ''
-    ).toUpperCase() === symbol
-  })
-
-  if (!item) return null
-
-  return (
-    Number(item.price) ||
-    Number(item.last) ||
-    Number(item.ultimo) ||
-    Number(item.px) ||
-    null
-  )
-}
-
-function parseRatio(item) {
-  if (item == null) return null
-
-  if (typeof item === 'number') {
-    return Number.isFinite(item) ? item : null
-  }
-
-  if (typeof item === 'string') {
-    const value = Number(
-      item
-        .replace(',', '.')
-        .replace(/[^0-9.-]/g, '')
-    )
-
-    return Number.isFinite(value) ? value : null
-  }
-
-  if (typeof item === 'object') {
-    return (
-      parseRatio(item.ratio) ||
-      parseRatio(item.ratioCedear) ||
-      parseRatio(item.ratio_cedear) ||
-      parseRatio(item.value) ||
-      parseRatio(item.valor) ||
-      null
-    )
-  }
-
-  return null
-}
-
-async function loadCedearRatios() {
-  try {
-    const response = await fetch(CEDEAR_RATIOS_URL)
-
-    if (!response.ok) {
-      throw new Error('Error obteniendo ratios')
-    }
-
-    const data = await response.json()
-
-    const result = {}
-
-    if (Array.isArray(data)) {
-      data.forEach(item => {
-        const ticker = String(
-          item.ticker ||
-          item.symbol ||
-          item.especie ||
-          item.nombre ||
-          ''
-        ).toUpperCase()
-
-        const ratio = parseRatio(item)
-
-        if (ticker && ratio) {
-          result[ticker] = ratio
-        }
-      })
-    } else if (data && typeof data === 'object') {
-      Object.entries(data).forEach(([ticker, value]) => {
-        const ratio = parseRatio(value)
-
-        if (ratio) {
-          result[String(ticker).toUpperCase()] = ratio
-        }
-      })
-    }
-
-    cedearRatios.value = result
-    cedearRatiosAuto.value = { ...result }
-  } catch (error) {
-    console.error(error)
-  }
-}
-
-function getCedearRatio(ticker) {
-  const symbol = String(ticker || '').toUpperCase()
-
-  return (
-    Number(cedearRatios.value[symbol]) ||
-    Number(cedearRatiosAuto.value[symbol]) ||
-    null
-  )
-}
-
-function setManualRatio(ticker, value) {
-  const symbol = String(ticker || '').toUpperCase()
-  const ratio = Number(value)
-
-  if (!symbol) return
-
-  if (Number.isFinite(ratio) && ratio > 0) {
-    cedearRatios.value[symbol] = ratio
-  } else {
-    cedearRatios.value[symbol] =
-      cedearRatiosAuto.value[symbol] || null
-  }
-}
-
+// =========================================================
+// FORMULARIO
+// =========================================================
 function startEdit(trade) {
   editingId.value = trade.id
-
-  Object.assign(form, {
-    date: trade.date || todayISO(),
-    assetType: trade.assetType || 'CEDEAR',
-    ticker: trade.ticker || '',
-    operation: trade.operation || 'COMPRA',
-    quantity: trade.quantity ?? '',
-    price: trade.price ?? '',
-    fee: trade.fee ?? '',
-    ccl: trade.ccl ?? '',
-    notes: trade.notes || ''
-  })
-
   viewMode.value = 'form'
+  form.date = trade.date
+  form.assetType = trade.assetType
+  form.ticker = trade.ticker
+  form.operation = trade.operation
+  form.quantity = trade.quantity
+  form.price = trade.price
+  form.fee = trade.fee
+  form.ccl = trade.ccl ?? ''
+  form.ratio = trade.ratio ?? 1
+  form.notes = trade.notes
+  // Al editar no pisamos el CCL ya cargado; si cambian la fecha, ahí sí
+  // se vuelve a buscar automáticamente.
+  cclIsAuto.value = false
+  cclMsg.value = ''
+  formError.value = ''
 }
 
 function cancelEdit() {
   editingId.value = null
   Object.assign(form, emptyForm())
-
-  if (cclActual.value) {
-    form.ccl = cclActual.value
-  }
+  formError.value = ''
+  cclMsg.value = ''
+  cclIsAuto.value = true
+  autofillCCL()
 }
 
 async function submitForm() {
-  if (saving.value) return
+  formError.value = ''
+  const ticker = form.ticker.trim().toUpperCase()
+  if (!ticker) return (formError.value = 'Ingresá un ticker')
+  if (!(Number(form.quantity) > 0)) return (formError.value = 'La cantidad debe ser mayor a 0')
+  if (!(Number(form.price) > 0)) return (formError.value = 'El precio debe ser mayor a 0')
+
+  const payload = {
+    date: form.date,
+    assetType: form.assetType,
+    ticker,
+    operation: form.operation,
+    quantity: Number(form.quantity),
+    price: Number(form.price),
+    fee: Number(form.fee) || 0,
+    ccl: form.ccl === '' ? null : Number(form.ccl),
+    ratio: Number(form.ratio) || 1,
+    notes: form.notes.trim(),
+  }
 
   saving.value = true
-  errorMsg.value = ''
-
   try {
-    const payload = {
-      date: form.date,
-      assetType: form.assetType,
-      ticker: String(form.ticker || '').toUpperCase().trim(),
-      operation: form.operation,
-      quantity: Number(form.quantity),
-      price: Number(form.price),
-      fee: Number(form.fee || 0),
-      ccl: Number(form.ccl || 0),
-      notes: form.notes
-    }
-
     if (editingId.value) {
-      await updateTrade(editingId.value, payload)
+      const updated = await updateTrade(editingId.value, payload)
+      const idx = trades.value.findIndex((t) => t.id === editingId.value)
+      if (idx !== -1) trades.value[idx] = updated
     } else {
-      await createTrade(payload)
+      const created = await createTrade(payload)
+      trades.value.push(created)
     }
-
     cancelEdit()
-    await loadAll()
-  } catch (error) {
-    console.error(error)
-    errorMsg.value =
-      error?.message ||
-      'No se pudo guardar el trade.'
+    await refreshSummary()
+  } catch (e) {
+    formError.value = e.message
   } finally {
     saving.value = false
   }
 }
 
-async function removeTrade(id) {
-  if (!confirm('¿Querés eliminar este trade?')) return
-
+async function removeTrade(trade) {
+  const ok = window.confirm(`¿Borrar la operación de ${trade.ticker} del ${formatDate(trade.date)}?`)
+  if (!ok) return
   try {
-    await deleteTrade(id)
-
-    if (editingId.value === id) {
-      cancelEdit()
-    }
-
-    await loadAll()
-  } catch (error) {
-    console.error(error)
-    errorMsg.value =
-      error?.message ||
-      'No se pudo eliminar el trade.'
+    await deleteTrade(trade.id)
+    trades.value = trades.value.filter((t) => t.id !== trade.id)
+    if (editingId.value === trade.id) cancelEdit()
+    await refreshSummary()
+  } catch (e) {
+    errorMsg.value = e.message
   }
 }
 
@@ -701,1045 +361,491 @@ function close() {
   emit('close')
 }
 
-function onOverlayClick(event) {
-  if (event.target === event.currentTarget) {
-    close()
-  }
+function onOverlayClick(e) {
+  if (e.target === e.currentTarget) close()
 }
 
-onMounted(async () => {
-  await loadAll()
+onMounted(() => {
+  loadAll()
 
-  await Promise.all([
-    fetchLiveCCL(),
-    loadLiveCedears(),
-    loadUSAPrices(),
-    loadCedearRatios()
-  ])
+  refreshLiveCCL()
+  intervaloCclActual = setInterval(refreshLiveCCL, CCL_REFRESH_MS)
 
-  cclInterval.value = setInterval(
-    refreshLiveCCL,
-    CCL_REFRESH_MS
-  )
+  loadLiveCedears()
+  intervaloCedears = setInterval(loadLiveCedears, CEDEARS_REFRESH_MS)
 
-  cedearInterval.value = setInterval(
-    loadLiveCedears,
-    CEDEARS_REFRESH_MS
-  )
-
-  usaPricesInterval.value = setInterval(
-    loadUSAPrices,
-    USA_PRICES_REFRESH_MS
-  )
+  // Primer autocompletado del CCL para el formulario "hoy" en blanco.
+  cclIsAuto.value = true
+  autofillCCL()
 })
 
 onUnmounted(() => {
-  if (cclInterval.value) {
-    clearInterval(cclInterval.value)
-  }
-
-  if (cedearInterval.value) {
-    clearInterval(cedearInterval.value)
-  }
-
-  if (usaPricesInterval.value) {
-    clearInterval(usaPricesInterval.value)
-  }
+  if (intervaloCclActual) clearInterval(intervaloCclActual)
+  if (intervaloCedears) clearInterval(intervaloCedears)
 })
 </script>
 
 <template>
-  <div
-    class="trades-overlay"
-    @click="onOverlayClick"
-  >
+  <div class="trades-overlay" @click="onOverlayClick">
     <div class="trades-modal">
-
-      <!-- HEADER -->
-      <header class="trades-header">
+      <div class="trades-header">
         <div class="trades-title">
-          <span>📒</span>
-          <span>Bitácora de Trades</span>
+          <span class="trades-icon">📒</span>
+          Bitácora de Trades
         </div>
-
-        <button
-          class="close-btn"
-          type="button"
-          aria-label="Cerrar"
-          @click="close"
-        >
-          ✕
-        </button>
-      </header>
-
-      <!-- LOADING -->
-      <div
-        v-if="loading"
-        class="loading"
-      >
-        Cargando operaciones...
+        <button class="close-btn" @click="close" title="Cerrar">✕</button>
       </div>
 
-      <!-- ERROR -->
-      <div
-        v-if="errorMsg"
-        class="error-msg"
-      >
-        {{ errorMsg }}
-      </div>
+      <div v-if="loading" class="trades-loading">Cargando bitácora...</div>
 
-      <!-- SUMMARY -->
-      <section class="summary-bar">
-
-        <div class="summary-card">
-          <span class="summary-label">
-            Resultado realizado ARS
-          </span>
-
-          <strong
-            :class="{
-              'pl-pos':
-                Number(summary.totals?.realizedPL) > 0,
-              'pl-neg':
-                Number(summary.totals?.realizedPL) < 0
-            }"
-          >
-            $ {{ formatMoney(summary.totals?.realizedPL || 0) }}
-          </strong>
-        </div>
-
-        <div class="summary-card">
-          <span class="summary-label">
-            Resultado realizado USD
-          </span>
-
-          <strong
-            :class="{
-              'pl-pos':
-                Number(summary.totals?.realizedPLUSD) > 0,
-              'pl-neg':
-                Number(summary.totals?.realizedPLUSD) < 0
-            }"
-          >
-            USD {{ formatMoney(summary.totals?.realizedPLUSD || 0) }}
-          </strong>
-        </div>
-
-        <div class="summary-card">
-          <span class="summary-label">
-            Capital invertido
-          </span>
-
-          <strong>
-            $ {{ formatMoney(summary.totals?.invested || 0) }}
-          </strong>
-        </div>
-
-        <div class="summary-card">
-          <span class="summary-label">
-            Posiciones abiertas
-          </span>
-
-          <strong>
-            {{ summary.totals?.openPositions || 0 }}
-          </strong>
-        </div>
-
-        <div class="summary-card">
-          <span class="summary-label">
-            Total de operaciones
-          </span>
-
-          <strong>
-            {{ summary.totals?.totalTrades || trades.length }}
-          </strong>
-        </div>
-
-        <div class="summary-card">
-          <span class="summary-label">
-            CCL actual
-          </span>
-
-          <strong>
-            $
-            {{ cclActual ? formatMoney(cclActual) : '-' }}
-          </strong>
-        </div>
-
-      </section>
-
-      <!-- TABS -->
-      <div class="view-tabs">
-
-        <button
-          type="button"
-          class="view-tab"
-          :class="{ active: viewMode === 'form' }"
-          @click="viewMode = 'form'"
-        >
-          📝 Cargar / Editar
-        </button>
-
-        <button
-          type="button"
-          class="view-tab"
-          :class="{ active: viewMode === 'list' }"
-          @click="viewMode = 'list'"
-        >
-          📋 Ver todo el detalle ({{ trades.length }})
-        </button>
-
-      </div>
-
-      <!-- =====================================================
-           LIST VIEW
-           ===================================================== -->
-      <section
-        v-if="viewMode === 'list'"
-        class="full-detail-screen"
-      >
-
-        <div class="table-header-row">
-          <h3 class="section-title">
-            Historial completo de operaciones
-          </h3>
-
-          <input
-            v-model="searchQuery"
-            type="search"
-            class="search-input"
-            placeholder="Buscar ticker, operación..."
-          >
-        </div>
-
-        <div
-          v-if="!paginatedTrades.length"
-          class="empty-state"
-        >
-          No hay operaciones que coincidan con la búsqueda.
-        </div>
-
-        <div
-          v-else
-          class="entry-cards"
-        >
-
-          <article
-            v-for="trade in paginatedTrades"
-            :key="trade.id"
-            class="entry-card"
-          >
-
-            <div class="entry-card-header">
-
-              <div class="entry-card-ticker">
-
-                <strong>
-                  {{ trade.ticker }}
-                </strong>
-
-                <span class="badge">
-                  {{ trade.assetType }}
-                </span>
-
-                <span
-                  class="badge"
-                  :class="
-                    trade.operation === 'COMPRA'
-                      ? 'badge-compra'
-                      : 'badge-venta'
-                  "
-                >
-                  {{ trade.operation }}
-                </span>
-
-              </div>
-
-              <div class="entry-card-actions">
-
-                <button
-                  type="button"
-                  class="icon-btn"
-                  title="Editar"
-                  @click="startEdit(trade)"
-                >
-                  ✎
-                </button>
-
-                <button
-                  type="button"
-                  class="icon-btn icon-btn-danger"
-                  title="Eliminar"
-                  @click="removeTrade(trade.id)"
-                >
-                  🗑
-                </button>
-
-              </div>
-
-            </div>
-
-            <div class="entry-card-grid">
-
-              <div class="detail-item">
-                <label>Fecha</label>
-                <strong>
-                  {{ formatDate(trade.date) }}
-                </strong>
-              </div>
-
-              <div class="detail-item">
-                <label>Cantidad</label>
-                <strong>
-                  {{ formatNum(trade.quantity, 4) }}
-                </strong>
-              </div>
-
-              <div class="detail-item">
-                <label>Precio unitario</label>
-                <strong>
-                  $ {{ formatMoney(trade.price) }}
-                </strong>
-              </div>
-
-              <div class="detail-item">
-                <label>CCL</label>
-                <strong>
-                  $
-                  {{
-                    trade.ccl
-                      ? formatMoney(trade.ccl)
-                      : '-'
-                  }}
-                </strong>
-              </div>
-
-              <div class="detail-item">
-                <label>Precio USD</label>
-                <strong>
-                  USD
-                  {{
-                    trade.ccl && trade.price
-                      ? formatMoney(
-                          Number(trade.price) /
-                            Number(trade.ccl)
-                        )
-                      : '-'
-                  }}
-                </strong>
-              </div>
-
-              <div class="detail-item">
-                <label>Comisión</label>
-                <strong>
-                  $ {{ formatMoney(trade.fee || 0) }}
-                </strong>
-              </div>
-
-              <div class="detail-item">
-                <label>Total</label>
-                <strong>
-                  $
-                  {{
-                    formatMoney(
-                      Number(trade.quantity || 0) *
-                        Number(trade.price || 0) +
-                        Number(trade.fee || 0)
-                    )
-                  }}
-                </strong>
-              </div>
-
-            </div>
-
-            <div
-              v-if="trade.notes"
-              class="entry-card-notes"
-            >
-              <span>Notas</span>
-              <strong>{{ trade.notes }}</strong>
-            </div>
-
-          </article>
-
-        </div>
-
-        <div
-          v-if="totalPages > 1"
-          class="pagination"
-        >
-
-          <button
-            type="button"
-            :disabled="currentPage === 1"
-            @click="goToPage(currentPage - 1)"
-          >
-            ‹
-          </button>
-
-          <button
-            v-for="page in totalPages"
-            :key="page"
-            type="button"
-            :class="{ active: page === currentPage }"
-            @click="goToPage(page)"
-          >
-            {{ page }}
-          </button>
-
-          <button
-            type="button"
-            :disabled="currentPage === totalPages"
-            @click="goToPage(currentPage + 1)"
-          >
-            ›
-          </button>
-
-        </div>
-
-      </section>
-
-      <!-- =====================================================
-           FORM VIEW
-           ===================================================== -->
       <template v-else>
+        <div v-if="errorMsg" class="trades-error">{{ errorMsg }}</div>
 
-        <!-- OPEN POSITIONS -->
-        <section
-          v-if="openPositions.length"
-          class="by-symbol-section"
-        >
+        <!-- Resumen general -->
+        <div class="summary-bar">
+          <div class="summary-card">
+            <span class="summary-label">Resultado realizado (ARS)</span>
+            <strong :class="summary.totals.realizedPL >= 0 ? 'pl-pos' : 'pl-neg'">
+              {{ summary.totals.realizedPL >= 0 ? '+' : '' }}${{ formatMoney(summary.totals.realizedPL) }}
+            </strong>
+          </div>
+          <div class="summary-card">
+            <span class="summary-label">Resultado realizado (USD)</span>
+            <strong :class="summary.totals.realizedPLUSD >= 0 ? 'pl-pos' : 'pl-neg'">
+              {{ summary.totals.realizedPLUSD >= 0 ? '+' : '' }}US${{ formatMoney(summary.totals.realizedPLUSD) }}
+            </strong>
+          </div>
+          <div class="summary-card">
+            <span class="summary-label">Invertido (posiciones abiertas)</span>
+            <strong>${{ formatMoney(summary.totals.invested) }}</strong>
+          </div>
+          <div class="summary-card">
+            <span class="summary-label">Posiciones abiertas</span>
+            <strong>{{ summary.totals.openPositions }}</strong>
+          </div>
+          <div class="summary-card">
+            <span class="summary-label">Operaciones cargadas</span>
+            <strong>{{ summary.totals.totalTrades }}</strong>
+          </div>
+          <div class="summary-card">
+            <span class="summary-label">CCL actual (referencia)</span>
+            <strong>{{ cclActual ? `$${formatMoney(cclActual)}` : '—' }}</strong>
+          </div>
+        </div>
 
+        <!-- Selector de pantalla: cargar/editar vs. ver todo el detalle -->
+        <div class="view-tabs">
+          <button
+            type="button"
+            class="view-tab"
+            :class="{ active: viewMode === 'form' }"
+            @click="viewMode = 'form'"
+          >
+            📝 Cargar / Editar
+          </button>
+          <button
+            type="button"
+            class="view-tab"
+            :class="{ active: viewMode === 'list' }"
+            @click="viewMode = 'list'"
+          >
+            📋 Ver todo el detalle ({{ trades.length }})
+          </button>
+        </div>
+
+        <!-- ============================================================ -->
+        <!-- PANTALLA: VER TODO EL DETALLE (solo lectura, una tarjeta por  -->
+        <!-- operación, sin formulario de por medio)                      -->
+        <!-- ============================================================ -->
+        <div v-if="viewMode === 'list'" class="full-detail-screen">
           <div class="table-header-row">
-            <h3 class="section-title">
-              Posiciones abiertas
-            </h3>
+            <div class="section-title">Todas las operaciones ({{ filteredTrades.length }})</div>
+            <div class="search-box">
+              <input
+                type="text"
+                v-model="searchQuery"
+                placeholder="Buscar por ticker..."
+                style="text-transform:uppercase"
+              >
+              <button v-if="searchQuery" type="button" class="search-clear" @click="searchQuery = ''">✕</button>
+            </div>
           </div>
 
+          <div v-if="!sortedTrades.length" class="empty-state">
+            {{ searchQuery ? `No hay operaciones que coincidan con "${searchQuery}".` : 'Todavía no cargaste ninguna operación.' }}
+          </div>
+
+          <div v-else class="entry-cards">
+            <div v-for="t in paginatedTrades" :key="t.id" class="entry-card">
+              <div class="entry-card-header">
+                <div class="entry-card-title">
+                  <span class="ticker-cell">{{ t.ticker }}</span>
+                  <span class="badge" :class="t.assetType === 'CEDEAR' ? 'badge-cedear' : 'badge-ar'">{{ t.assetType === 'CEDEAR' ? 'CEDEAR' : 'Acción AR' }}</span>
+                  <span class="badge" :class="t.operation === 'COMPRA' ? 'badge-buy' : 'badge-sell'">{{ t.operation === 'COMPRA' ? 'Compra' : 'Venta' }}</span>
+                </div>
+                <div class="entry-card-actions">
+                  <button class="icon-btn" title="Editar" @click="startEdit(t)">✎</button>
+                  <button class="icon-btn icon-btn-danger" title="Eliminar" @click="removeTrade(t)">🗑</button>
+                </div>
+              </div>
+
+              <div class="entry-card-dates">{{ formatDate(t.date) }}</div>
+
+              <div class="entry-card-grid">
+                <div class="detail-item">
+                  <span class="detail-label">Cantidad</span>
+                  <span class="detail-value">{{ formatNum(t.quantity) }}</span>
+                </div>
+                <div class="detail-item">
+                  <span class="detail-label">Ratio</span>
+                  <span class="detail-value">{{ t.ratio || 1 }}</span>
+                </div>
+                <div class="detail-item">
+                  <span class="detail-label">Precio (ARS)</span>
+                  <span class="detail-value">${{ formatMoney(t.price) }}</span>
+                </div>
+                <div class="detail-item">
+                  <span class="detail-label">CCL del día</span>
+                  <span class="detail-value">{{ t.ccl ? `$${formatMoney(t.ccl)}` : '—' }}</span>
+                </div>
+                <div class="detail-item">
+                  <span class="detail-label">Precio (USD)</span>
+                  <span class="detail-value">{{ t.priceUSD != null ? `US$${formatMoney(t.priceUSD)}` : '—' }}</span>
+                </div>
+                <div class="detail-item">
+                  <span class="detail-label">Comisión</span>
+                  <span class="detail-value">${{ formatMoney(t.fee) }}</span>
+                </div>
+                <div class="detail-item">
+                  <span class="detail-label">Total operación</span>
+                  <span class="detail-value">${{ formatMoney(t.total) }}</span>
+                </div>
+              </div>
+
+              <div class="entry-card-notes">
+                <div class="detail-item">
+                  <span class="detail-label">Notas</span>
+                  <p class="detail-text">{{ t.notes || 'Sin notas cargadas.' }}</p>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div v-if="sortedTrades.length" class="pagination-bar">
+            <button type="button" class="page-btn" :disabled="currentPage === 1" @click="goToPage(currentPage - 1)">← Anterior</button>
+            <span class="page-info">Página {{ currentPage }} de {{ totalPages }} · mostrando {{ paginatedTrades.length }} de {{ sortedTrades.length }}</span>
+            <button type="button" class="page-btn" :disabled="currentPage === totalPages" @click="goToPage(currentPage + 1)">Siguiente →</button>
+          </div>
+        </div>
+
+        <template v-if="viewMode === 'form'">
+        <!-- Posiciones abiertas: valor de mercado y rendimiento no realizado -->
+        <div v-if="openPositions.length" class="by-symbol-section">
+          <div class="section-title">Posiciones abiertas — valor de mercado</div>
           <div class="by-symbol-table-wrap">
-
-            <table class="by-symbol-table positions-table">
-
+            <table class="by-symbol-table">
               <thead>
                 <tr>
                   <th>Ticker</th>
                   <th>Cantidad</th>
-                  <th>Costo prom. ARS</th>
-                  <th>Precio actual ARS</th>
-                  <th>Valor actual ARS</th>
-                  <th>Rendimiento ARS</th>
-                  <th>Valor actual USD</th>
-                  <th>Rendimiento USD</th>
+                  <th>Costo prom. (ARS)</th>
+                  <th title="Precio en vivo, solo CEDEARs (data912)">Precio actual (ARS)</th>
+                  <th>Valor actual (ARS)</th>
+                  <th>Rendimiento (ARS)</th>
+                  <th>Valor actual (USD)</th>
+                  <th>Rendimiento (USD)</th>
                 </tr>
               </thead>
-
               <tbody>
-
-                <tr
-                  v-for="position in openPositions"
-                  :key="position.ticker"
-                >
-
-                  <td class="ticker-cell">
-
-                    <div>
-                      <span>
-                        {{ position.ticker }}
-                      </span>
-
-                      <span class="badge">
-                        {{ position.assetType }}
-                      </span>
-                    </div>
-
-                    <div
-                      v-if="position.assetType === 'CEDEAR'"
-                      class="ratio-row"
-                    >
-                      <span>Ratio</span>
-
-                      <input
-                        type="number"
-                        min="0"
-                        step="0.01"
-                        :value="getCedearRatio(position.ticker) || ''"
-                        @change="
-                          setManualRatio(
-                            position.ticker,
-                            $event.target.value
-                          )
-                        "
-                      >
-
-                      <span
-                        v-if="
-                          cedearRatiosAuto[position.ticker]
-                        "
-                        class="auto-tag"
-                      >
-                        auto
-                      </span>
-
-                      <span
-                        v-if="position.impliedCCL"
-                        class="ratio-subrow-ccl"
-                      >
-                        CCL implícito:
-                        $
-                        {{
-                          formatMoney(
-                            position.impliedCCL
-                          )
-                        }}
-                      </span>
-                    </div>
-
+                <tr v-for="p in openPositions" :key="p.ticker">
+                  <td class="ticker-cell">{{ p.ticker }}</td>
+                  <td>{{ formatNum(p.quantity) }}</td>
+                  <td>${{ formatMoney(p.avgCost) }}</td>
+                  <td>{{ p.livePrice != null ? `$${formatMoney(p.livePrice)}` : '—' }}</td>
+                  <td>{{ p.marketValueARS != null ? `$${formatMoney(p.marketValueARS)}` : '—' }}</td>
+                  <td v-if="p.unrealizedARS === null">—</td>
+                  <td v-else :class="p.unrealizedARS >= 0 ? 'pl-pos' : 'pl-neg'">
+                    {{ p.unrealizedARS >= 0 ? '+' : '' }}${{ formatMoney(p.unrealizedARS) }}
+                    <span class="pct-tag">({{ formatPct(p.unrealizedARSPct) }})</span>
                   </td>
-
-                  <td>
-                    {{ formatNum(position.quantity, 4) }}
+                  <td>{{ p.marketValueUSD != null ? `US$${formatMoney(p.marketValueUSD)}` : '—' }}</td>
+                  <td v-if="p.unrealizedUSD === null">—</td>
+                  <td v-else :class="p.unrealizedUSD >= 0 ? 'pl-pos' : 'pl-neg'">
+                    {{ p.unrealizedUSD >= 0 ? '+' : '' }}US${{ formatMoney(p.unrealizedUSD) }}
+                    <span class="pct-tag">({{ formatPct(p.unrealizedUSDPct) }})</span>
                   </td>
-
-                  <td>
-                    $
-                    {{ formatMoney(position.avgCost) }}
-                  </td>
-
-                  <td>
-                    $
-                    {{
-                      formatMoney(
-                        position.currentPriceARS
-                      )
-                    }}
-                  </td>
-
-                  <td>
-                    $
-                    {{
-                      formatMoney(
-                        position.marketValueARS
-                      )
-                    }}
-                  </td>
-
-                  <td
-                    :class="
-                      position.unrealizedARS >= 0
-                        ? 'pl-pos'
-                        : 'pl-neg'
-                    "
-                  >
-                    $
-                    {{
-                      formatMoney(
-                        position.unrealizedARS
-                      )
-                    }}
-                  </td>
-
-                  <td>
-                    USD
-                    {{
-                      formatMoney(
-                        position.currentValueUSD
-                      )
-                    }}
-                  </td>
-
-                  <td
-                    :class="
-                      position.unrealizedUSD >= 0
-                        ? 'pl-pos'
-                        : 'pl-neg'
-                    "
-                  >
-                    USD
-                    {{
-                      formatMoney(
-                        position.unrealizedUSD
-                      )
-                    }}
-                  </td>
-
                 </tr>
-
               </tbody>
-
             </table>
-
           </div>
-
-          <p class="table-hint">
-            En CEDEARs, el valor USD se calcula utilizando
-            el <strong>ratio del CEDEAR</strong> y el precio
-            de la acción subyacente.
-          </p>
-
-        </section>
-
-        <!-- HISTORICAL SUMMARY -->
-        <section class="history-section">
-
-          <div class="table-header-row">
-            <h3 class="section-title">
-              Resumen histórico por ticker
-            </h3>
+          <div class="table-hint">
+            Precio en vivo solo para CEDEARs (fuente: data912.com, cada 30s). Para acciones argentinas
+            todavía no hay precio en vivo conectado acá.
           </div>
+        </div>
 
+        <!-- Resumen por ticker (histórico, incluye posiciones cerradas) -->
+        <div v-if="summary.bySymbol.length" class="by-symbol-section">
+          <div class="section-title">Resultado por ticker (histórico)</div>
           <div class="by-symbol-table-wrap">
-
-            <table class="by-symbol-table history-table">
-
+            <table class="by-symbol-table">
               <thead>
                 <tr>
                   <th>Ticker</th>
                   <th>Tipo</th>
-                  <th>Comprado</th>
-                  <th>Vendido</th>
-                  <th>Posición</th>
-                  <th>Invertido</th>
-                  <th>Realizado ARS</th>
-                  <th>Realizado USD</th>
+                  <th>Cantidad</th>
+                  <th>Costo prom. (ARS)</th>
+                  <th>Costo prom. (USD)</th>
+                  <th>P&L realizado (ARS)</th>
+                  <th>P&L realizado (USD)</th>
                 </tr>
               </thead>
-
               <tbody>
-
-                <tr
-                  v-for="row in summary.bySymbol"
-                  :key="row.ticker"
-                >
-
-                  <td class="ticker-cell">
-                    {{ row.ticker }}
+                <tr v-for="s in summary.bySymbol" :key="s.ticker">
+                  <td class="ticker-cell">{{ s.ticker }}</td>
+                  <td><span class="badge" :class="s.assetType === 'CEDEAR' ? 'badge-cedear' : 'badge-ar'">{{ s.assetType === 'CEDEAR' ? 'CEDEAR' : 'Acción AR' }}</span></td>
+                  <td>{{ formatNum(s.quantity) }}</td>
+                  <td>${{ formatMoney(s.avgCost) }}</td>
+                  <td :title="s.usdIncomplete ? 'Faltan cargar CCL en alguna operación de este ticker' : ''">
+                    {{ s.usdIncomplete ? '—' : `US$${formatMoney(s.avgCostUSD)}` }}
                   </td>
-
-                  <td>
-                    <span class="badge">
-                      {{ row.assetType }}
-                    </span>
+                  <td :class="s.realizedPL >= 0 ? 'pl-pos' : 'pl-neg'">
+                    {{ s.realizedPL >= 0 ? '+' : '' }}${{ formatMoney(s.realizedPL) }}
                   </td>
-
-                  <td>
-                    {{ formatNum(row.bought || 0, 4) }}
+                  <td v-if="s.usdIncomplete" :title="'Faltan cargar CCL en alguna operación de este ticker'">—</td>
+                  <td v-else :class="s.realizedPLUSD >= 0 ? 'pl-pos' : 'pl-neg'">
+                    {{ s.realizedPLUSD >= 0 ? '+' : '' }}US${{ formatMoney(s.realizedPLUSD) }}
                   </td>
-
-                  <td>
-                    {{ formatNum(row.sold || 0, 4) }}
-                  </td>
-
-                  <td>
-                    {{ formatNum(row.quantity || 0, 4) }}
-                  </td>
-
-                  <td>
-                    $
-                    {{
-                      formatMoney(
-                        row.invested || 0
-                      )
-                    }}
-                  </td>
-
-                  <td
-                    :class="
-                      Number(row.realizedPL || 0) >= 0
-                        ? 'pl-pos'
-                        : 'pl-neg'
-                    "
-                  >
-                    $
-                    {{
-                      formatMoney(
-                        row.realizedPL || 0
-                      )
-                    }}
-                  </td>
-
-                  <td
-                    :class="
-                      Number(row.realizedPLUSD || 0) >= 0
-                        ? 'pl-pos'
-                        : 'pl-neg'
-                    "
-                  >
-                    USD
-                    {{
-                      formatMoney(
-                        row.realizedPLUSD || 0
-                      )
-                    }}
-                  </td>
-
                 </tr>
-
               </tbody>
-
             </table>
-
           </div>
+        </div>
 
-        </section>
-
-        <!-- FORM -->
-        <section class="trade-form">
-
-          <div class="table-header-row">
-
-            <h3 class="section-title">
-              {{
-                editingId
-                  ? 'Editar operación'
-                  : 'Nueva operación'
-              }}
-            </h3>
-
-          </div>
-
+        <!-- Formulario alta / edición -->
+        <form class="trade-form" @submit.prevent="submitForm">
+          <div class="section-title">{{ editingId ? 'Editar operación' : 'Nueva operación' }}</div>
           <div class="form-grid">
-
-            <!-- DATE -->
             <div class="form-field">
-
-              <label>
-                Fecha
-              </label>
-
-              <input
-                v-model="form.date"
-                type="date"
-              >
-
+              <label>Fecha</label>
+              <input type="date" v-model="form.date" required>
             </div>
-
-            <!-- ASSET -->
             <div class="form-field">
-
-              <label>
-                Activo
-              </label>
-
+              <label>Activo</label>
               <select v-model="form.assetType">
-                <option value="CEDEAR">
-                  CEDEAR
-                </option>
-
-                <option value="ACCION">
-                  Acción
-                </option>
-
-                <option value="ADR">
-                  ADR
-                </option>
-
-                <option value="BONO">
-                  Bono
-                </option>
-
-                <option value="ON">
-                  ON
-                </option>
-
-                <option value="FCI">
-                  FCI
-                </option>
-
-                <option value="OTRO">
-                  Otro
-                </option>
+                <option value="CEDEAR">CEDEAR</option>
+                <option value="ACCION_AR">Acción argentina</option>
               </select>
-
             </div>
-
-            <!-- TICKER -->
             <div class="form-field">
-
-              <label>
-                Ticker
-              </label>
-
-              <input
-                v-model="form.ticker"
-                type="text"
-                placeholder="Ej: AAPL"
-                @input="
-                  form.ticker =
-                    form.ticker.toUpperCase()
-                "
-              >
-
+              <label>Ticker</label>
+              <input type="text" v-model="form.ticker" placeholder="Ej: KO, GGAL" style="text-transform:uppercase" required>
             </div>
-
-            <!-- OPERATION -->
             <div class="form-field">
-
-              <label>
-                Operación
-              </label>
-
+              <label>Operación</label>
               <select v-model="form.operation">
-                <option value="COMPRA">
-                  COMPRA
-                </option>
-
-                <option value="VENTA">
-                  VENTA
-                </option>
+                <option value="COMPRA">Compra</option>
+                <option value="VENTA">Venta</option>
               </select>
-
             </div>
-
-            <!-- QUANTITY -->
             <div class="form-field">
-
-              <label>
-                Cantidad
-              </label>
-
-              <input
-                v-model="form.quantity"
-                type="number"
-                min="0"
-                step="0.0001"
-                placeholder="0"
-              >
-
+              <label>Cantidad</label>
+              <input type="number" min="0" step="any" v-model="form.quantity" placeholder="Ej: 100" required>
             </div>
-
-            <!-- PRICE -->
             <div class="form-field">
-
-              <label>
-                Precio unitario ARS
-              </label>
-
-              <input
-                v-model="form.price"
-                type="number"
-                min="0"
-                step="0.01"
-                placeholder="0.00"
-              >
-
+              <label>Ratio (ej: 10, 20)</label>
+              <input type="number" min="0.001" step="any" v-model="form.ratio" placeholder="Ej: 10" required>
             </div>
-
-            <!-- FEE -->
             <div class="form-field">
-
-              <label>
-                Comisión
-              </label>
-
-              <input
-                v-model="form.fee"
-                type="number"
-                min="0"
-                step="0.01"
-                placeholder="0.00"
-              >
-
+              <label>Precio unitario ($)</label>
+              <input type="number" min="0" step="any" v-model="form.price" placeholder="Ej: 5230" required>
             </div>
-
-            <!-- CCL -->
             <div class="form-field">
-
+              <label>Comisión ($)</label>
+              <input type="number" min="0" step="any" v-model="form.fee" placeholder="Opcional">
+            </div>
+            <div class="form-field">
               <label>
-                CCL
-                <span
-                  v-if="cclIsAuto"
-                  class="auto-tag"
-                >
-                  automático
-                </span>
+                Dólar CCL del día
+                <span v-if="cclLoading" class="auto-tag">(buscando...)</span>
+                <span v-else-if="cclIsAuto && form.ccl" class="auto-tag">(automático)</span>
               </label>
-
               <div class="ccl-input-row">
-
                 <input
+                  type="number" min="0" step="any"
                   v-model="form.ccl"
-                  type="number"
-                  min="0"
-                  step="0.01"
-                  placeholder="CCL"
                   @input="onCclManualInput"
+                  placeholder="Ej: 1320.50"
                 >
-
-                <button
-                  type="button"
-                  class="icon-btn"
-                  title="Actualizar CCL"
-                  :disabled="cclLoading"
-                  @click="refetchCCL"
-                >
-                  ↻
-                </button>
-
+                <button type="button" class="icon-btn" title="Volver a buscar el CCL de esta fecha" @click="refetchCCL">🔄</button>
               </div>
-
-              <div
-                v-if="cclMsg"
-                class="ccl-hint"
-              >
-                {{ cclMsg }}
-              </div>
-
+              <div v-if="cclMsg" class="ccl-hint">{{ cclMsg }}</div>
             </div>
-
-            <!-- NOTES -->
             <div class="form-field form-field-wide">
-
-              <label>
-                Notas
-              </label>
-
-              <textarea
-                v-model="form.notes"
-                rows="2"
-                placeholder="Motivo de entrada, estrategia, observaciones..."
-              />
-
+              <label>Notas</label>
+              <input type="text" v-model="form.notes" placeholder="Opcional">
             </div>
-
           </div>
 
-          <div
-            v-if="errorMsg"
-            class="error-msg"
-          >
-            {{ errorMsg }}
-          </div>
+          <div v-if="formError" class="form-error">{{ formError }}</div>
 
           <div class="form-actions">
-
-            <button
-              v-if="editingId"
-              type="button"
-              class="btn-secondary"
-              @click="cancelEdit"
-            >
-              Cancelar
+            <button type="submit" class="btn-primary" :disabled="saving">
+              {{ saving ? 'Guardando...' : editingId ? 'Guardar cambios' : 'Agregar operación' }}
             </button>
-
-            <button
-              type="button"
-              class="btn-primary"
-              :disabled="saving"
-              @click="submitForm"
-            >
-              {{
-                saving
-                  ? 'Guardando...'
-                  : editingId
-                    ? 'Guardar cambios'
-                    : 'Registrar trade'
-              }}
-            </button>
-
+            <button v-if="editingId" type="button" class="btn-secondary" @click="cancelEdit">Cancelar</button>
           </div>
+        </form>
 
-        </section>
+        <!-- Tabla de operaciones -->
+        <div class="table-header-row">
+          <div class="section-title">Historial ({{ filteredTrades.length }})</div>
+          <div class="search-box">
+            <input
+              type="text"
+              v-model="searchQuery"
+              placeholder="Buscar por ticker..."
+              style="text-transform:uppercase"
+            >
+            <button v-if="searchQuery" type="button" class="search-clear" @click="searchQuery = ''">✕</button>
+          </div>
+        </div>
+        <div class="trades-table-wrap">
+          <table class="trades-table" v-if="sortedTrades.length">
+            <thead>
+              <tr>
+                <th>Fecha</th>
+                <th>Activo</th>
+                <th>Ticker</th>
+                <th>Operación</th>
+                <th>Cantidad</th>
+                <th>Ratio</th>
+                <th>Precio (ARS)</th>
+                <th>CCL</th>
+                <th>Precio (USD)</th>
+                <th>Comisión</th>
+                <th>Total</th>
+                <th>Notas</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="t in paginatedTrades" :key="t.id" :class="{ 'row-editing': editingId === t.id }">
+                <td>{{ formatDate(t.date) }}</td>
+                <td><span class="badge" :class="t.assetType === 'CEDEAR' ? 'badge-cedear' : 'badge-ar'">{{ t.assetType === 'CEDEAR' ? 'CEDEAR' : 'Acción AR' }}</span></td>
+                <td class="ticker-cell">{{ t.ticker }}</td>
+                <td><span class="badge" :class="t.operation === 'COMPRA' ? 'badge-buy' : 'badge-sell'">{{ t.operation === 'COMPRA' ? 'Compra' : 'Venta' }}</span></td>
+                <td>{{ formatNum(t.quantity) }}</td>
+                <td>{{ t.ratio || 1 }}</td>
+                <td>${{ formatMoney(t.price) }}</td>
+                <td>{{ t.ccl ? `$${formatMoney(t.ccl)}` : '—' }}</td>
+                <td>{{ t.priceUSD != null ? `US$${formatMoney(t.priceUSD)}` : '—' }}</td>
+                <td>${{ formatMoney(t.fee) }}</td>
+                <td>${{ formatMoney(t.total) }}</td>
+                <td class="notes-cell" :title="t.notes">{{ t.notes || '—' }}</td>
+                <td class="actions-cell">
+                  <button class="icon-btn" title="Editar" @click="startEdit(t)">✎</button>
+                  <button class="icon-btn icon-btn-danger" title="Eliminar" @click="removeTrade(t)">🗑</button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div v-else class="empty-state">Todavía no cargaste ninguna operación.</div>
+        </div>
 
+        <div v-if="sortedTrades.length" class="pagination-bar">
+          <button type="button" class="page-btn" :disabled="currentPage === 1" @click="goToPage(currentPage - 1)">← Anterior</button>
+          <span class="page-info">Página {{ currentPage }} de {{ totalPages }} · mostrando {{ paginatedTrades.length }} de {{ sortedTrades.length }}</span>
+          <button type="button" class="page-btn" :disabled="currentPage === totalPages" @click="goToPage(currentPage + 1)">Siguiente →</button>
+        </div>
+        </template>
       </template>
-
     </div>
   </div>
 </template>
 
 <style scoped>
 /* =========================================================
-   BITÁCORA DE TRADES
-   REDISEÑO VISUAL — SIN MODIFICAR LÓGICA
+   BITÁCORA DE TRADES — UI PROFESIONAL
+   LÓGICA Y TEMPLATE ORIGINAL SIN MODIFICACIONES
    ========================================================= */
 
 .trades-overlay {
   position: fixed;
   inset: 0;
   z-index: 1000;
-
   display: flex;
   align-items: center;
   justify-content: center;
-
   padding: 18px;
-
   background: rgba(0, 0, 0, 0.72);
-  backdrop-filter: blur(5px);
-  -webkit-backdrop-filter: blur(5px);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
 }
-
-/* =========================================================
-   MODAL PRINCIPAL
-   ========================================================= */
 
 .trades-modal {
   box-sizing: border-box;
-
   width: 100%;
   max-width: 1480px;
   max-height: calc(100vh - 36px);
-
-  overflow-y: auto;
   overflow-x: hidden;
-
+  overflow-y: auto;
   padding: 26px 30px 30px;
-
   display: flex;
   flex-direction: column;
   gap: 22px;
-
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 16px;
-
   color: var(--text);
-
   font-size: 14px;
   line-height: 1.5;
-
   box-shadow:
-    0 28px 80px rgba(0, 0, 0, 0.42),
-    0 8px 24px rgba(0, 0, 0, 0.22);
-
+    0 30px 90px rgba(0, 0, 0, 0.45),
+    0 10px 30px rgba(0, 0, 0, 0.24);
   scrollbar-gutter: stable;
   overscroll-behavior: contain;
 }
 
-.trades-modal::-webkit-scrollbar {
+.trades-modal::-webkit-scrollbar,
+.by-symbol-table-wrap::-webkit-scrollbar,
+.trades-table-wrap::-webkit-scrollbar {
   width: 8px;
   height: 8px;
 }
 
-.trades-modal::-webkit-scrollbar-track {
+.trades-modal::-webkit-scrollbar-track,
+.by-symbol-table-wrap::-webkit-scrollbar-track,
+.trades-table-wrap::-webkit-scrollbar-track {
   background: transparent;
 }
 
-.trades-modal::-webkit-scrollbar-thumb {
+.trades-modal::-webkit-scrollbar-thumb,
+.by-symbol-table-wrap::-webkit-scrollbar-thumb,
+.trades-table-wrap::-webkit-scrollbar-thumb {
   background: var(--border);
   border-radius: 999px;
 }
 
-.trades-modal::-webkit-scrollbar-thumb:hover {
+.trades-modal::-webkit-scrollbar-thumb:hover,
+.by-symbol-table-wrap::-webkit-scrollbar-thumb:hover,
+.trades-table-wrap::-webkit-scrollbar-thumb:hover {
   background: var(--text-dim);
 }
 
-/* =========================================================
+/* =========================
    HEADER
-   ========================================================= */
+   ========================= */
 
 .trades-header {
   position: sticky;
   top: -26px;
   z-index: 20;
-
   display: flex;
   align-items: center;
   justify-content: space-between;
-
   gap: 16px;
-
-  padding: 0 0 18px;
-
+  padding-bottom: 17px;
   background: var(--panel);
   border-bottom: 1px solid var(--border);
 }
@@ -1748,43 +854,37 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   gap: 10px;
-
   color: var(--text);
-
   font-size: 21px;
   font-weight: 750;
-  letter-spacing: -0.01em;
+  line-height: 1.2;
+  letter-spacing: -0.02em;
 }
 
 .trades-icon {
   font-size: 20px;
+  line-height: 1;
 }
 
 .close-btn {
   flex: 0 0 auto;
-
   width: 36px;
   height: 36px;
-
-  display: flex;
+  display: inline-flex;
   align-items: center;
   justify-content: center;
-
+  padding: 0;
   background: var(--bg);
   border: 1px solid var(--border);
   border-radius: 9px;
-
   color: var(--text-dim);
-
   cursor: pointer;
-
-  font-size: 15px;
-
+  font-size: 14px;
   transition:
-    color 0.15s ease,
-    border-color 0.15s ease,
-    background 0.15s ease,
-    transform 0.15s ease;
+    color .15s ease,
+    border-color .15s ease,
+    background .15s ease,
+    transform .15s ease;
 }
 
 .close-btn:hover {
@@ -1794,110 +894,83 @@ onUnmounted(() => {
   transform: translateY(-1px);
 }
 
-/* =========================================================
-   LOADING / ERRORES
-   ========================================================= */
+/* =========================
+   STATES
+   ========================= */
 
 .trades-loading,
 .empty-state {
   text-align: center;
   color: var(--text-dim);
-  font-size: 14px;
+  font-size: 13px;
   padding: 30px 20px;
 }
 
 .trades-error,
 .form-error {
   background: rgba(239, 68, 68, 0.08);
-  border: 1px solid rgba(239, 68, 68, 0.32);
+  border: 1px solid rgba(239, 68, 68, 0.30);
   color: #ef4444;
-
   padding: 11px 14px;
-
   border-radius: 9px;
-
-  font-size: 13px;
+  font-size: 12px;
 }
 
-/* =========================================================
-   RESUMEN SUPERIOR
-   ========================================================= */
+/* =========================
+   SUMMARY
+   ========================= */
 
 .summary-bar {
   display: grid;
   grid-template-columns: repeat(6, minmax(0, 1fr));
-
   gap: 10px;
 }
 
 .summary-card {
   min-width: 0;
-  min-height: 80px;
-
+  min-height: 82px;
+  box-sizing: border-box;
   display: flex;
   flex-direction: column;
   justify-content: center;
-
   gap: 6px;
-
   padding: 13px 15px;
-
   background: var(--bg);
   border: 1px solid var(--border);
   border-radius: 11px;
-
   transition:
-    border-color 0.15s ease,
-    transform 0.15s ease,
-    box-shadow 0.15s ease;
+    border-color .15s ease,
+    transform .15s ease,
+    box-shadow .15s ease;
 }
 
 .summary-card:hover {
-  border-color: color-mix(
-    in srgb,
-    var(--border) 60%,
-    var(--blue, #2563eb)
-  );
-
+  border-color: var(--text-dim);
   transform: translateY(-1px);
-
-  box-shadow:
-    0 5px 16px rgba(0, 0, 0, 0.12);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.14);
 }
 
 .summary-label {
   color: var(--text-dim);
-
-  font-size: 10.5px;
-  font-weight: 650;
-
-  letter-spacing: 0.045em;
-  line-height: 1.2;
-
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1.25;
+  letter-spacing: .045em;
   text-transform: uppercase;
 }
 
 .summary-card strong {
   min-width: 0;
-
   color: var(--text);
-
-  font-size: 20px;
+  font-size: 19px;
   font-weight: 750;
-
   line-height: 1.15;
-
   font-family: var(--font-num, inherit);
   font-variant-numeric: tabular-nums;
-
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-
-/* =========================================================
-   P&L
-   ========================================================= */
 
 .pl-pos {
   color: #22c55e !important;
@@ -1907,45 +980,35 @@ onUnmounted(() => {
   color: #ef4444 !important;
 }
 
-/* =========================================================
+/* =========================
    TABS
-   ========================================================= */
+   ========================= */
 
 .view-tabs {
-  display: flex;
+  display: inline-flex;
+  align-self: flex-start;
   align-items: center;
-
-  gap: 6px;
-
+  gap: 5px;
   padding: 4px;
-
   background: var(--bg);
-
   border: 1px solid var(--border);
-  border-radius: 11px;
+  border-radius: 10px;
 }
 
 .view-tab {
   flex: 0 0 auto;
-
   background: transparent;
-
   border: 1px solid transparent;
-  border-radius: 8px;
-
   color: var(--text-dim);
-
-  padding: 9px 15px;
-
-  font-size: 13px;
-  font-weight: 650;
-
+  border-radius: 7px;
+  padding: 9px 14px;
+  font-size: 12px;
+  font-weight: 700;
   cursor: pointer;
-
   transition:
-    color 0.15s ease,
-    background 0.15s ease,
-    border-color 0.15s ease;
+    color .15s ease,
+    background .15s ease,
+    border-color .15s ease;
 }
 
 .view-tab:hover {
@@ -1955,74 +1018,54 @@ onUnmounted(() => {
 
 .view-tab.active {
   background: rgba(37, 99, 235, 0.12);
-
-  border-color: rgba(37, 99, 235, 0.55);
-
+  border-color: rgba(37, 99, 235, 0.45);
   color: var(--blue, #60a5fa);
-
-  box-shadow:
-    inset 0 0 0 1px rgba(37, 99, 235, 0.05);
 }
 
-/* =========================================================
-   TÍTULOS DE SECCIÓN
-   ========================================================= */
+/* =========================
+   GENERAL
+   ========================= */
 
 .section-title {
   color: var(--text);
-
-  font-size: 14px;
+  font-size: 12px;
   font-weight: 750;
-
-  letter-spacing: 0.01em;
+  letter-spacing: .055em;
+  text-transform: uppercase;
 }
 
 .table-header-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
-
-  gap: 14px;
+  gap: 12px;
   flex-wrap: wrap;
 }
 
-/* =========================================================
-   BUSCADOR
-   ========================================================= */
+/* =========================
+   SEARCH
+   ========================= */
 
 .search-box {
   position: relative;
-
   display: flex;
   align-items: center;
-
   width: min(320px, 100%);
 }
 
 .search-box input {
   width: 100%;
-
   box-sizing: border-box;
-
-  padding: 10px 34px 10px 12px;
-
+  padding: 9px 34px 9px 12px;
   background: var(--bg);
-
   border: 1px solid var(--border);
   border-radius: 8px;
-
   color: var(--text);
-
-  font-size: 13px;
+  font-size: 12px;
   font-family: inherit;
-
   transition:
-    border-color 0.15s ease,
-    box-shadow 0.15s ease;
-}
-
-.search-box input::placeholder {
-  color: var(--text-dim);
+    border-color .15s ease,
+    box-shadow .15s ease;
 }
 
 .search-box input:hover {
@@ -2031,264 +1074,180 @@ onUnmounted(() => {
 
 .search-box input:focus {
   outline: none;
-
   border-color: var(--blue, #2563eb);
-
-  box-shadow:
-    0 0 0 3px rgba(37, 99, 235, 0.11);
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.10);
 }
 
 .search-clear {
   position: absolute;
   right: 8px;
-
-  display: flex;
-  align-items: center;
-  justify-content: center;
-
   width: 24px;
   height: 24px;
-
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   padding: 0;
-
   background: transparent;
-  border: 0;
-
+  border: none;
   color: var(--text-dim);
-
   cursor: pointer;
-
-  font-size: 12px;
+  font-size: 11px;
 }
 
 .search-clear:hover {
   color: var(--text);
 }
 
-/* =========================================================
-   DETALLE COMPLETO
-   ========================================================= */
+/* =========================
+   FULL DETAIL
+   ========================= */
 
 .full-detail-screen {
   display: flex;
   flex-direction: column;
-
   gap: 14px;
-
   min-width: 0;
 }
 
 .entry-cards {
   display: flex;
   flex-direction: column;
-
   gap: 10px;
 }
 
 .entry-card {
   min-width: 0;
-
-  padding: 17px 19px;
-
+  padding: 16px 18px;
   display: flex;
   flex-direction: column;
-
   gap: 12px;
-
   background: var(--bg);
-
   border: 1px solid var(--border);
   border-radius: 11px;
-
   transition:
-    border-color 0.15s ease,
-    box-shadow 0.15s ease,
-    transform 0.15s ease;
+    border-color .15s ease,
+    box-shadow .15s ease;
 }
 
 .entry-card:hover {
-  border-color: color-mix(
-    in srgb,
-    var(--border) 65%,
-    var(--blue, #2563eb)
-  );
-
-  box-shadow:
-    0 6px 20px rgba(0, 0, 0, 0.13);
+  border-color: var(--text-dim);
+  box-shadow: 0 7px 22px rgba(0, 0, 0, 0.13);
 }
 
 .entry-card-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-
-  gap: 12px;
   flex-wrap: wrap;
+  gap: 10px;
 }
 
 .entry-card-title {
   display: flex;
   align-items: center;
-
   gap: 7px;
   flex-wrap: wrap;
 }
 
 .entry-card-title .ticker-cell {
-  font-size: 17px;
+  font-size: 16px;
 }
 
 .entry-card-actions {
   display: flex;
   align-items: center;
-
   gap: 6px;
 }
 
 .entry-card-dates {
   color: var(--text-dim);
-
-  font-size: 11.5px;
-
+  font-size: 11px;
   font-family: var(--font-num, inherit);
   font-variant-numeric: tabular-nums;
 }
 
 .entry-card-grid {
   display: grid;
-
-  grid-template-columns:
-    repeat(6, minmax(120px, 1fr));
-
+  grid-template-columns: repeat(7, minmax(105px, 1fr));
   gap: 1px;
-
   overflow: hidden;
-
   background: var(--border);
-
   border: 1px solid var(--border);
   border-radius: 8px;
 }
 
-.detail-item {
-  min-width: 0;
+.entry-card-grid .detail-item {
+  background: var(--bg);
+}
 
+.entry-card-notes {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 10px;
+}
+
+.detail-item {
   display: flex;
   flex-direction: column;
-
   gap: 4px;
-
+  min-width: 0;
   padding: 10px 12px;
-
-  background: var(--bg);
 }
 
 .detail-label {
   color: var(--text-dim);
-
-  font-size: 10.5px;
-  font-weight: 650;
-
-  letter-spacing: 0.035em;
+  font-size: 9.5px;
+  font-weight: 700;
+  line-height: 1.2;
+  letter-spacing: .055em;
   text-transform: uppercase;
 }
 
 .detail-value {
   min-width: 0;
-
   color: var(--text);
-
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 650;
-
   font-family: var(--font-num, inherit);
   font-variant-numeric: tabular-nums;
-
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.entry-card-notes {
-  display: grid;
-
-  grid-template-columns:
-    minmax(180px, 1fr);
-
-  gap: 10px;
-}
-
 .detail-text {
   margin: 0;
-
   color: var(--text);
-
-  font-size: 12.5px;
+  font-size: 12px;
   line-height: 1.55;
-
   white-space: pre-wrap;
   word-break: break-word;
 }
 
-/* =========================================================
-   TABLAS
-   ========================================================= */
-
-.by-symbol-section {
-  display: flex;
-  flex-direction: column;
-
-  gap: 9px;
-
-  min-width: 0;
-}
+/* =========================
+   TABLES
+   ========================= */
 
 .by-symbol-table-wrap,
 .trades-table-wrap {
   width: 100%;
-
   overflow: auto;
-
   background: var(--bg);
-
   border: 1px solid var(--border);
-  border-radius: 11px;
-
+  border-radius: 10px;
   scrollbar-gutter: stable;
 }
 
 .by-symbol-table-wrap {
-  max-height: 390px;
-}
-
-.by-symbol-table-wrap::-webkit-scrollbar,
-.trades-table-wrap::-webkit-scrollbar {
-  width: 7px;
-  height: 7px;
-}
-
-.by-symbol-table-wrap::-webkit-scrollbar-thumb,
-.trades-table-wrap::-webkit-scrollbar-thumb {
-  background: var(--border);
-  border-radius: 999px;
-}
-
-.by-symbol-table-wrap::-webkit-scrollbar-thumb:hover,
-.trades-table-wrap::-webkit-scrollbar-thumb:hover {
-  background: var(--text-dim);
+  max-height: 400px;
 }
 
 .by-symbol-table,
 .trades-table {
   width: 100%;
-
-  min-width: 1050px;
-
   border-collapse: separate;
   border-spacing: 0;
-
-  font-size: 12.5px;
-
+  font-size: 11.5px;
   font-variant-numeric: tabular-nums;
 }
 
@@ -2297,37 +1256,25 @@ onUnmounted(() => {
   position: sticky;
   top: 0;
   z-index: 5;
-
-  padding: 10px 13px;
-
+  padding: 10px 11px;
   background: var(--bg);
-
   color: var(--text-dim);
-
   border-bottom: 1px solid var(--border);
-
-  font-size: 10.5px;
-  font-weight: 700;
-
-  letter-spacing: 0.045em;
-
+  font-size: 9.5px;
+  font-weight: 750;
+  letter-spacing: .05em;
   text-transform: uppercase;
-
   white-space: nowrap;
+  text-align: left;
 }
 
 .by-symbol-table td,
 .trades-table td {
-  padding: 10px 13px;
-
+  padding: 10px 11px;
   background: var(--bg);
-
   color: var(--text);
-
   border-bottom: 1px solid var(--border);
-
   white-space: nowrap;
-
   font-family: var(--font-num, inherit);
 }
 
@@ -2341,334 +1288,167 @@ onUnmounted(() => {
   border-bottom: none;
 }
 
-/* Números alineados */
-
 .by-symbol-table th:not(:first-child),
 .by-symbol-table td:not(:first-child) {
   text-align: right;
 }
-
-/* Ticker siempre a la izquierda */
 
 .by-symbol-table th:first-child,
 .by-symbol-table td:first-child {
   text-align: left;
 }
 
-/* =========================================================
-   TICKER
-   ========================================================= */
+.trades-table {
+  min-width: 1180px;
+}
+
+.trades-table th:last-child,
+.trades-table td:last-child {
+  width: 1%;
+}
+
+.notes-cell {
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--text-dim) !important;
+  font-family: inherit !important;
+}
+
+.row-editing td {
+  background: rgba(37, 99, 235, 0.08) !important;
+}
+
+.table-hint {
+  padding: 2px 2px 0;
+  color: var(--text-dim);
+  font-size: 10.5px;
+  line-height: 1.45;
+}
+
+.pct-tag {
+  margin-left: 3px;
+  color: var(--text-dim);
+  font-size: 10px;
+}
+
+/* =========================
+   TICKER + BADGES
+   ========================= */
 
 .ticker-cell {
   color: var(--text);
-
-  font-size: 14px;
   font-weight: 750;
-
-  letter-spacing: 0.01em;
+  letter-spacing: .01em;
 }
-
-/* =========================================================
-   BADGES
-   ========================================================= */
 
 .badge {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-
-  min-height: 21px;
-
+  min-height: 20px;
+  box-sizing: border-box;
   padding: 3px 8px;
-
   border-radius: 999px;
-
-  font-size: 10px;
-  font-weight: 700;
-
+  font-size: 9px;
+  font-weight: 750;
   line-height: 1;
-
+  text-transform: uppercase;
   white-space: nowrap;
 }
 
 .badge-cedear {
-  background: rgba(59, 130, 246, 0.13);
+  background: rgba(59, 130, 246, 0.12);
+  border: 1px solid rgba(59, 130, 246, 0.20);
   color: #60a5fa;
-
-  border: 1px solid rgba(59, 130, 246, 0.18);
 }
 
 .badge-ar {
-  background: rgba(168, 85, 247, 0.13);
+  background: rgba(168, 85, 247, 0.12);
+  border: 1px solid rgba(168, 85, 247, 0.20);
   color: #c084fc;
-
-  border: 1px solid rgba(168, 85, 247, 0.18);
 }
 
 .badge-buy {
   background: rgba(34, 197, 94, 0.11);
-  color: #22c55e;
-
   border: 1px solid rgba(34, 197, 94, 0.18);
+  color: #22c55e;
 }
 
 .badge-sell {
   background: rgba(239, 68, 68, 0.11);
-  color: #ef4444;
-
   border: 1px solid rgba(239, 68, 68, 0.18);
+  color: #ef4444;
 }
 
-/* =========================================================
-   PERCENTAJES
-   ========================================================= */
-
-.pct-tag {
-  display: inline-block;
-
-  margin-left: 4px;
-
-  color: var(--text-dim);
-
-  font-size: 10.5px;
-  font-weight: 600;
-
-  white-space: nowrap;
-}
-
-/* =========================================================
-   RATIO CEDEAR
-   ========================================================= */
-
-.ratio-subrow {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-
-  gap: 6px;
-
-  margin-top: 6px;
-
-  color: var(--text-dim);
-
-  font-size: 10.5px;
-
-  white-space: normal;
-}
-
-.ratio-input {
-  width: 58px;
-  height: 25px;
-
-  padding: 3px 7px;
-
-  background: var(--panel);
-
-  border: 1px solid var(--border);
-  border-radius: 6px;
-
-  color: var(--text);
-
-  font-size: 11px;
-  font-family: inherit;
-
-  font-variant-numeric: tabular-nums;
-}
-
-.ratio-input:hover {
-  border-color: var(--text-dim);
-}
-
-.ratio-input:focus {
-  outline: none;
-
-  border-color: var(--blue, #2563eb);
-
-  box-shadow:
-    0 0 0 2px rgba(37, 99, 235, 0.10);
-}
-
-.ratio-subrow-ccl {
-  color: var(--text-dim);
-
-  font-size: 10.5px;
-}
-
-.auto-tag {
-  color: #22c55e;
-
-  font-size: 10.5px;
-  font-weight: 650;
-}
-
-/* =========================================================
-   HINT DE TABLA
-   ========================================================= */
-
-.table-hint {
-  padding: 2px 2px 0;
-
-  color: var(--text-dim);
-
-  font-size: 11px;
-  line-height: 1.55;
-}
-
-.table-hint strong {
-  color: var(--text);
-}
-
-/* =========================================================
-   BOTONES DE ACCIÓN
-   ========================================================= */
+/* =========================
+   ACTIONS
+   ========================= */
 
 .actions-cell {
   display: flex;
   align-items: center;
   justify-content: flex-end;
-
   gap: 6px;
 }
 
 .icon-btn {
   width: 31px;
   height: 31px;
-
   display: inline-flex;
   align-items: center;
   justify-content: center;
-
   padding: 0;
-
   background: var(--bg);
-
   border: 1px solid var(--border);
   border-radius: 7px;
-
   color: var(--text-dim);
-
   cursor: pointer;
-
-  font-size: 13px;
-
+  font-size: 12px;
   transition:
-    color 0.15s ease,
-    border-color 0.15s ease,
-    background 0.15s ease,
-    transform 0.15s ease;
+    color .15s ease,
+    border-color .15s ease,
+    background .15s ease,
+    transform .15s ease;
 }
 
 .icon-btn:hover {
   color: var(--text);
-
   border-color: var(--text-dim);
-
   background: var(--panel);
-
   transform: translateY(-1px);
 }
 
 .icon-btn-danger:hover {
   color: #ef4444;
-
-  border-color: rgba(239, 68, 68, 0.55);
-
-  background: rgba(239, 68, 68, 0.06);
+  border-color: rgba(239, 68, 68, .55);
+  background: rgba(239, 68, 68, .06);
 }
 
-/* =========================================================
-   PAGINACIÓN
-   ========================================================= */
-
-.pagination-bar {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-
-  gap: 12px;
-
-  padding-top: 2px;
-}
-
-.page-btn {
-  min-height: 34px;
-
-  padding: 8px 13px;
-
-  background: var(--bg);
-
-  border: 1px solid var(--border);
-  border-radius: 8px;
-
-  color: var(--text-dim);
-
-  font-size: 12px;
-  font-weight: 650;
-
-  cursor: pointer;
-
-  transition:
-    color 0.15s ease,
-    border-color 0.15s ease,
-    background 0.15s ease;
-}
-
-.page-btn:hover:not(:disabled) {
-  color: var(--text);
-
-  border-color: var(--text-dim);
-
-  background: var(--panel);
-}
-
-.page-btn:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
-}
-
-.page-info {
-  color: var(--text-dim);
-
-  font-size: 11.5px;
-
-  font-variant-numeric: tabular-nums;
-
-  white-space: nowrap;
-}
-
-/* =========================================================
-   FORMULARIO
-   ========================================================= */
+/* =========================
+   FORM
+   ========================= */
 
 .trade-form {
   display: flex;
   flex-direction: column;
-
   gap: 18px;
-
-  padding: 20px 21px;
-
+  padding: 19px 20px;
   background: var(--bg);
-
   border: 1px solid var(--border);
   border-radius: 11px;
 }
 
 .form-grid {
   display: grid;
-
-  grid-template-columns:
-    repeat(4, minmax(0, 1fr));
-
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 14px 15px;
 }
 
 .form-field {
   display: flex;
   flex-direction: column;
-
   gap: 6px;
-
   min-width: 0;
 }
 
@@ -2679,42 +1459,31 @@ onUnmounted(() => {
 .form-field label {
   display: flex;
   align-items: center;
-
-  gap: 6px;
-
+  gap: 5px;
   color: var(--text-dim);
-
-  font-size: 11.5px;
-  font-weight: 650;
-
-  line-height: 1.25;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1.2;
+  letter-spacing: .025em;
 }
 
 .form-field input,
 .form-field select {
   width: 100%;
   height: 41px;
-
   box-sizing: border-box;
-
   padding: 9px 11px;
-
   background: var(--panel);
-
   border: 1px solid var(--border);
   border-radius: 8px;
-
   color: var(--text);
-
-  font-size: 13px;
+  font-size: 12px;
   font-family: inherit;
-
   font-variant-numeric: tabular-nums;
-
   transition:
-    border-color 0.15s ease,
-    box-shadow 0.15s ease,
-    background 0.15s ease;
+    border-color .15s ease,
+    box-shadow .15s ease,
+    background .15s ease;
 }
 
 .form-field input:hover,
@@ -2729,25 +1498,23 @@ onUnmounted(() => {
 .form-field input:focus,
 .form-field select:focus {
   outline: none;
-
   border-color: var(--blue, #2563eb);
-
-  box-shadow:
-    0 0 0 3px rgba(37, 99, 235, 0.10);
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, .10);
 }
 
 .form-field input[type='date'] {
   color-scheme: dark;
 }
 
-/* =========================================================
-   CCL
-   ========================================================= */
+.auto-tag {
+  color: #22c55e;
+  font-weight: 650;
+  text-transform: none;
+}
 
 .ccl-input-row {
   display: flex;
   align-items: stretch;
-
   gap: 7px;
 }
 
@@ -2756,116 +1523,118 @@ onUnmounted(() => {
   min-width: 0;
 }
 
-.ccl-input-row .icon-btn {
-  flex: 0 0 31px;
-}
-
 .ccl-hint {
   color: #fbbf24;
-
-  font-size: 10.5px;
+  font-size: 10px;
   line-height: 1.4;
 }
 
-/* =========================================================
-   BOTONES FORMULARIO
-   ========================================================= */
+/* =========================
+   FORM BUTTONS
+   ========================= */
 
 .form-actions {
   display: flex;
   align-items: center;
   justify-content: flex-end;
-
   gap: 8px;
-
-  padding-top: 2px;
+  padding-top: 1px;
 }
 
 .btn-primary,
 .btn-secondary {
   min-height: 40px;
-
   padding: 9px 17px;
-
   border-radius: 8px;
-
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 700;
   font-family: inherit;
-
   cursor: pointer;
-
   transition:
-    background 0.15s ease,
-    border-color 0.15s ease,
-    color 0.15s ease,
-    transform 0.15s ease;
+    background .15s ease,
+    border-color .15s ease,
+    color .15s ease,
+    transform .15s ease;
 }
 
 .btn-primary {
   background: #2563eb;
-
   border: 1px solid #2563eb;
-
   color: #fff;
 }
 
 .btn-primary:hover:not(:disabled) {
   background: #1d4ed8;
-
   border-color: #1d4ed8;
-
   transform: translateY(-1px);
 }
 
 .btn-primary:disabled {
-  opacity: 0.55;
+  opacity: .55;
   cursor: not-allowed;
 }
 
 .btn-secondary {
   background: var(--panel);
-
   border: 1px solid var(--border);
-
   color: var(--text-dim);
 }
 
 .btn-secondary:hover {
   color: var(--text);
-
   border-color: var(--text-dim);
-
   transform: translateY(-1px);
 }
 
-/* =========================================================
-   ESTADO DE EDICIÓN
-   ========================================================= */
+/* =========================
+   PAGINATION
+   ========================= */
 
-.row-editing {
-  background: rgba(37, 99, 235, 0.08);
+.pagination-bar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding-top: 1px;
 }
 
-/* =========================================================
-   CELDAS DE NOTAS
-   ========================================================= */
-
-.notes-cell {
-  max-width: 200px;
-
-  overflow: hidden;
-
-  text-overflow: ellipsis;
-
+.page-btn {
+  min-height: 34px;
+  padding: 8px 13px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
   color: var(--text-dim);
-
-  font-family: inherit;
+  font-size: 11px;
+  font-weight: 650;
+  cursor: pointer;
+  transition:
+    color .15s ease,
+    border-color .15s ease,
+    background .15s ease;
 }
 
-/* =========================================================
-   FOCUS
-   ========================================================= */
+.page-btn:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--text-dim);
+  background: var(--panel);
+}
+
+.page-btn:disabled {
+  opacity: .4;
+  cursor: not-allowed;
+}
+
+.page-info {
+  color: var(--text-dim);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* =========================
+   ACCESSIBILITY / FOCUS
+   ========================= */
 
 button:focus-visible,
 input:focus-visible,
@@ -2874,30 +1643,23 @@ select:focus-visible {
   outline-offset: 2px;
 }
 
-/* =========================================================
-   RESPONSIVE — TABLET
-   ========================================================= */
+/* =========================
+   RESPONSIVE
+   ========================= */
 
 @media (max-width: 1250px) {
   .summary-bar {
-    grid-template-columns:
-      repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
   .entry-card-grid {
-    grid-template-columns:
-      repeat(3, minmax(120px, 1fr));
+    grid-template-columns: repeat(4, minmax(100px, 1fr));
   }
 
   .form-grid {
-    grid-template-columns:
-      repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 }
-
-/* =========================================================
-   RESPONSIVE — TABLET PEQUEÑA
-   ========================================================= */
 
 @media (max-width: 900px) {
   .trades-overlay {
@@ -2906,12 +1668,8 @@ select:focus-visible {
 
   .trades-modal {
     max-height: calc(100vh - 20px);
-
     padding: 22px;
-
     gap: 18px;
-
-    border-radius: 13px;
   }
 
   .trades-header {
@@ -2919,24 +1677,17 @@ select:focus-visible {
   }
 
   .summary-bar {
-    grid-template-columns:
-      repeat(2, minmax(0, 1fr));
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .entry-card-grid {
-    grid-template-columns:
-      repeat(2, minmax(120px, 1fr));
+    grid-template-columns: repeat(2, minmax(110px, 1fr));
   }
 
   .form-grid {
-    grid-template-columns:
-      repeat(2, minmax(0, 1fr));
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
-
-/* =========================================================
-   RESPONSIVE — CELULAR
-   ========================================================= */
 
 @media (max-width: 760px) {
   .trades-overlay {
@@ -2946,23 +1697,17 @@ select:focus-visible {
   .trades-modal {
     width: 100%;
     max-width: 100%;
-
     height: 100vh;
     max-height: none;
-
     padding: 18px 15px 22px;
-
     gap: 17px;
-
     border-radius: 0;
-
     border-left: 0;
     border-right: 0;
   }
 
   .trades-header {
     top: -18px;
-
     padding-bottom: 14px;
   }
 
@@ -2970,35 +1715,26 @@ select:focus-visible {
     font-size: 18px;
   }
 
-  .close-btn {
-    width: 34px;
-    height: 34px;
-  }
-
   .summary-bar {
-    grid-template-columns:
-      repeat(2, minmax(0, 1fr));
-
     gap: 7px;
   }
 
   .summary-card {
     min-height: 72px;
-
     padding: 10px 11px;
   }
 
   .summary-label {
-    font-size: 9.5px;
+    font-size: 9px;
   }
 
   .summary-card strong {
-    font-size: 17px;
+    font-size: 16px;
   }
 
   .view-tabs {
+    max-width: 100%;
     overflow-x: auto;
-
     scrollbar-width: none;
   }
 
@@ -3007,17 +1743,13 @@ select:focus-visible {
   }
 
   .view-tab {
-    font-size: 12px;
-
     padding: 8px 11px;
+    font-size: 11px;
   }
 
   .table-header-row {
     align-items: stretch;
-
     flex-direction: column;
-
-    gap: 9px;
   }
 
   .search-box {
@@ -3027,21 +1759,6 @@ select:focus-visible {
 
   .entry-card {
     padding: 14px;
-
-    gap: 11px;
-  }
-
-  .entry-card-header {
-    align-items: flex-start;
-  }
-
-  .entry-card-grid {
-    grid-template-columns:
-      repeat(2, minmax(0, 1fr));
-  }
-
-  .entry-card-notes {
-    grid-template-columns: 1fr;
   }
 
   .form-grid {
@@ -3066,30 +1783,18 @@ select:focus-visible {
 
   .pagination-bar {
     flex-wrap: wrap;
-
-    gap: 8px;
   }
 
   .page-info {
     order: -1;
-
     width: 100%;
-
     text-align: center;
   }
 }
 
-/* =========================================================
-   RESPONSIVE — CELULAR MUY PEQUEÑO
-   ========================================================= */
-
 @media (max-width: 420px) {
   .summary-bar {
-    gap: 6px;
-  }
-
-  .summary-card {
-    padding: 9px;
+    grid-template-columns: 1fr;
   }
 
   .summary-card strong {
@@ -3100,8 +1805,8 @@ select:focus-visible {
     grid-template-columns: 1fr;
   }
 
-  .entry-card-title .ticker-cell {
-    font-size: 16px;
+  .trades-title {
+    font-size: 17px;
   }
 }
 </style>
