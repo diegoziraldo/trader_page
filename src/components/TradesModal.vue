@@ -21,6 +21,17 @@ const CEDEARS_REFRESH_MS = 30_000
 // que tipearlo a mano para operaciones viejas.
 const HISTORICAL_CCL_BASE = 'https://api.argentinadatos.com/v1/cotizaciones/dolares/contadoconliqui'
 
+// --- Precio en USD de la acción subyacente (mismo host que ya usamos para
+// CEDEARs, así evitamos depender de un tercero nuevo para esto) ---
+const USA_STOCKS_LIVE_URL = 'https://data912.com/live/usa_stocks'
+const USA_ADRS_LIVE_URL = 'https://data912.com/live/usa_adrs'
+const USA_PRICES_REFRESH_MS = 60_000
+
+// --- Ratio CEDEAR / acción subyacente (cuántos CEDEARs equivalen a 1 ---
+// acción). Fuente pública, best-effort: si no está disponible o quedó
+// desactualizada, el usuario la corrige a mano y el cálculo se ajusta solo.
+const CEDEAR_RATIOS_URL = 'https://ferminrp.github.io/google-sheets-argento/api/cedears.json'
+
 const trades = ref([])
 const summary = ref({
   bySymbol: [],
@@ -44,6 +55,15 @@ let intervaloCclActual = null
 const liveCedears = ref([])
 let intervaloCedears = null
 
+// --- Precio en USD de la acción subyacente (data912) ---
+const usaPrices = ref({}) // { TICKER: precioUSD }
+let intervaloUsaPrices = null
+
+// --- Ratio CEDEAR/acción. cedearRatiosAuto[ticker] === false significa que
+// el usuario lo corrigió a mano y no debe pisarse con el autocompletado. ---
+const cedearRatios = ref({})     // { TICKER: ratio numérico }
+const cedearRatiosAuto = reactive({}) // { TICKER: true | false }
+
 // --- Autocompletado del CCL en el formulario ---
 const cclLoading = ref(false)
 const cclIsAuto = ref(false)
@@ -63,7 +83,6 @@ function emptyForm() {
     price: '',
     fee: '',
     ccl: '',
-    ratio: 1,
     notes: '',
   }
 }
@@ -131,14 +150,36 @@ const openPositions = computed(() =>
   summary.value.bySymbol
     .filter((s) => s.quantity > 0)
     .map((s) => {
-      const livePrice = s.assetType === 'CEDEAR' ? getLivePrice(s.ticker) : null
+      const isCedear = s.assetType === 'CEDEAR'
+      const livePrice = isCedear ? getLivePrice(s.ticker) : null
       const marketValueARS = livePrice != null ? s.quantity * livePrice : null
       const unrealizedARS = marketValueARS != null ? marketValueARS - s.invested : null
       const unrealizedARSPct =
         marketValueARS != null && s.invested > 0 ? (unrealizedARS / s.invested) * 100 : null
 
-      const marketValueUSD =
-        marketValueARS != null && cclActual.value ? marketValueARS / cclActual.value : null
+      // --- Valuación en USD ---
+      // Para CEDEARs, el CCL "oficial" (dolarapi) puede diferir bastante del
+      // CCL implícito de cada CEDEAR en particular. Para no perder el precio
+      // real de ganancia/pérdida, valuamos directamente con la cantidad de
+      // acciones equivalentes (según el ratio) y el precio real de la acción
+      // en dólares (data912). Si falta el ratio o el precio subyacente,
+      // caemos de vuelta al CCL general como aproximación (marcada en la UI).
+      const ratio = isCedear ? getRatio(s.ticker) : null
+      const underlyingPriceUSD = isCedear ? getUnderlyingPriceUSD(s.ticker) : null
+      const usesRatioValuation = isCedear && ratio != null && underlyingPriceUSD != null
+
+      let marketValueUSD = null
+      if (usesRatioValuation) {
+        marketValueUSD = (s.quantity / ratio) * underlyingPriceUSD
+      } else if (marketValueARS != null && cclActual.value) {
+        marketValueUSD = marketValueARS / cclActual.value
+      }
+
+      // CCL implícito de este CEDEAR puntual, a modo informativo: cuánto
+      // "vale" el dólar si valuás por el precio real de la acción.
+      const impliedCCL =
+        usesRatioValuation && livePrice != null ? (livePrice * ratio) / underlyingPriceUSD : null
+
       const unrealizedUSD =
         marketValueUSD != null && !s.usdIncomplete && s.investedUSD != null
           ? marketValueUSD - s.investedUSD
@@ -152,6 +193,10 @@ const openPositions = computed(() =>
         marketValueARS,
         unrealizedARS,
         unrealizedARSPct,
+        ratio,
+        underlyingPriceUSD,
+        usesRatioValuation,
+        impliedCCL,
         marketValueUSD,
         unrealizedUSD,
         unrealizedUSDPct,
@@ -274,6 +319,92 @@ function getLivePrice(ticker) {
 }
 
 // =========================================================
+// PRECIO EN USD DE LA ACCIÓN SUBYACENTE (data912)
+// =========================================================
+async function loadUsaPrices() {
+  try {
+    const [stocksRes, adrsRes] = await Promise.allSettled([
+      fetch(USA_STOCKS_LIVE_URL),
+      fetch(USA_ADRS_LIVE_URL),
+    ])
+    const merged = {}
+    for (const settled of [stocksRes, adrsRes]) {
+      if (settled.status !== 'fulfilled' || !settled.value.ok) continue
+      const list = await settled.value.json()
+      for (const item of list) {
+        const sym = String(item.symbol || '').toUpperCase()
+        const price = Number(item.c)
+        if (sym && price > 0) merged[sym] = price
+      }
+    }
+    usaPrices.value = merged
+  } catch (e) {
+    console.error('No se pudo cargar el precio en USD de las acciones subyacentes', e)
+  }
+}
+
+function getUnderlyingPriceUSD(ticker) {
+  return usaPrices.value[ticker] ?? null
+}
+
+// =========================================================
+// RATIO CEDEAR / ACCIÓN SUBYACENTE
+// =========================================================
+// Acepta tanto "20" (20 CEDEARs = 1 acción) como formato "20:1" o, para
+// ratios inversos, "1:2" (1 CEDEAR = 2 acciones).
+function parseRatio(raw) {
+  if (raw === null || raw === undefined) return null
+  const str = String(raw).trim()
+  if (!str) return null
+  if (str.includes(':')) {
+    const [a, b] = str.split(':').map(Number)
+    if (!a || !b) return null
+    return a / b
+  }
+  const n = Number(str)
+  return n > 0 ? n : null
+}
+
+async function loadCedearRatios() {
+  try {
+    const res = await fetch(CEDEAR_RATIOS_URL)
+    if (!res.ok) throw new Error('No se pudo consultar la fuente de ratios')
+    const data = await res.json()
+    const items = Array.isArray(data) ? data : data.items || []
+    for (const item of items) {
+      const ticker = String(item.Cedears || item.ticker || '').toUpperCase()
+      const ratio = parseRatio(item.Ratio ?? item.ratio)
+      if (!ticker || !ratio) continue
+      // No pisamos un ratio que el usuario ya haya corregido a mano.
+      if (cedearRatiosAuto[ticker] === false) continue
+      cedearRatios.value[ticker] = ratio
+      cedearRatiosAuto[ticker] = true
+    }
+  } catch (e) {
+    // No es crítico: si falla, cada CEDEAR se puede cargar a mano.
+    console.error('No se pudo cargar la tabla de ratios de CEDEARs', e)
+  }
+}
+
+function getRatio(ticker) {
+  return cedearRatios.value[ticker] ?? null
+}
+
+// Permite al usuario corregir el ratio a mano (por ticker faltante o
+// desactualizado). Queda marcado como "manual" para no perderlo si
+// después se refresca la tabla automática.
+function setManualRatio(ticker, rawValue) {
+  const n = Number(rawValue)
+  if (n > 0) {
+    cedearRatios.value = { ...cedearRatios.value, [ticker]: n }
+  } else {
+    const { [ticker]: _omit, ...rest } = cedearRatios.value
+    cedearRatios.value = rest
+  }
+  cedearRatiosAuto[ticker] = false
+}
+
+// =========================================================
 // FORMULARIO
 // =========================================================
 function startEdit(trade) {
@@ -287,7 +418,6 @@ function startEdit(trade) {
   form.price = trade.price
   form.fee = trade.fee
   form.ccl = trade.ccl ?? ''
-  form.ratio = trade.ratio ?? 1
   form.notes = trade.notes
   // Al editar no pisamos el CCL ya cargado; si cambian la fecha, ahí sí
   // se vuelve a buscar automáticamente.
@@ -321,7 +451,6 @@ async function submitForm() {
     price: Number(form.price),
     fee: Number(form.fee) || 0,
     ccl: form.ccl === '' ? null : Number(form.ccl),
-    ratio: Number(form.ratio) || 1,
     notes: form.notes.trim(),
   }
 
@@ -374,6 +503,12 @@ onMounted(() => {
   loadLiveCedears()
   intervaloCedears = setInterval(loadLiveCedears, CEDEARS_REFRESH_MS)
 
+  loadUsaPrices()
+  intervaloUsaPrices = setInterval(loadUsaPrices, USA_PRICES_REFRESH_MS)
+
+  // Los ratios casi no cambian en el día a día, alcanza con cargarlos una vez.
+  loadCedearRatios()
+
   // Primer autocompletado del CCL para el formulario "hoy" en blanco.
   cclIsAuto.value = true
   autofillCCL()
@@ -382,6 +517,7 @@ onMounted(() => {
 onUnmounted(() => {
   if (intervaloCclActual) clearInterval(intervaloCclActual)
   if (intervaloCedears) clearInterval(intervaloCedears)
+  if (intervaloUsaPrices) clearInterval(intervaloUsaPrices)
 })
 </script>
 
@@ -497,10 +633,6 @@ onUnmounted(() => {
                   <span class="detail-value">{{ formatNum(t.quantity) }}</span>
                 </div>
                 <div class="detail-item">
-                  <span class="detail-label">Ratio</span>
-                  <span class="detail-value">{{ t.ratio || 1 }}</span>
-                </div>
-                <div class="detail-item">
                   <span class="detail-label">Precio (ARS)</span>
                   <span class="detail-value">${{ formatMoney(t.price) }}</span>
                 </div>
@@ -548,39 +680,73 @@ onUnmounted(() => {
                 <tr>
                   <th>Ticker</th>
                   <th>Cantidad</th>
-                  <th>Costo prom. (ARS)</th>
-                  <th title="Precio en vivo, solo CEDEARs (data912)">Precio actual (ARS)</th>
-                  <th>Valor actual (ARS)</th>
-                  <th>Rendimiento (ARS)</th>
-                  <th>Valor actual (USD)</th>
-                  <th>Rendimiento (USD)</th>
+                  <th title="Precio en vivo, solo CEDEARs (data912)">Precio (ARS)</th>
+                  <th title="Con ratio conocido, el USD se calcula con el precio real de la acción. Sin ratio, se aproxima con el CCL general (≈).">Valor actual</th>
+                  <th title="Con ratio conocido, el USD se calcula con el precio real de la acción. Sin ratio, se aproxima con el CCL general (≈).">Rendimiento</th>
                 </tr>
               </thead>
               <tbody>
                 <tr v-for="p in openPositions" :key="p.ticker">
-                  <td class="ticker-cell">{{ p.ticker }}</td>
-                  <td>{{ formatNum(p.quantity) }}</td>
-                  <td>${{ formatMoney(p.avgCost) }}</td>
-                  <td>{{ p.livePrice != null ? `$${formatMoney(p.livePrice)}` : '—' }}</td>
-                  <td>{{ p.marketValueARS != null ? `$${formatMoney(p.marketValueARS)}` : '—' }}</td>
-                  <td v-if="p.unrealizedARS === null">—</td>
-                  <td v-else :class="p.unrealizedARS >= 0 ? 'pl-pos' : 'pl-neg'">
-                    {{ p.unrealizedARS >= 0 ? '+' : '' }}${{ formatMoney(p.unrealizedARS) }}
-                    <span class="pct-tag">({{ formatPct(p.unrealizedARSPct) }})</span>
+                  <td>
+                    <div class="ticker-cell">{{ p.ticker }}</div>
+                    <div v-if="p.assetType === 'CEDEAR'" class="ratio-subrow">
+                      <span>Ratio:</span>
+                      <input
+                        type="number" min="0" step="any"
+                        :value="p.ratio ?? ''"
+                        @change="setManualRatio(p.ticker, $event.target.value)"
+                        placeholder="ej: 10"
+                        class="ratio-input"
+                        title="Cantidad de CEDEARs por 1 acción"
+                      >
+                      <span v-if="p.ratio != null && cedearRatiosAuto[p.ticker] !== false" class="auto-tag">auto</span>
+                    </div>
                   </td>
-                  <td>{{ p.marketValueUSD != null ? `US$${formatMoney(p.marketValueUSD)}` : '—' }}</td>
-                  <td v-if="p.unrealizedUSD === null">—</td>
-                  <td v-else :class="p.unrealizedUSD >= 0 ? 'pl-pos' : 'pl-neg'">
-                    {{ p.unrealizedUSD >= 0 ? '+' : '' }}US${{ formatMoney(p.unrealizedUSD) }}
-                    <span class="pct-tag">({{ formatPct(p.unrealizedUSDPct) }})</span>
+                  <td>{{ formatNum(p.quantity) }}</td>
+                  <td>
+                    <div class="stacked-cell">
+                      <span class="stacked-line-dim">Costo ${{ formatMoney(p.avgCost) }}</span>
+                      <span>{{ p.livePrice != null ? `Actual $${formatMoney(p.livePrice)}` : 'Actual —' }}</span>
+                    </div>
+                  </td>
+                  <td>
+                    <div class="stacked-cell">
+                      <span>{{ p.marketValueARS != null ? `$${formatMoney(p.marketValueARS)}` : '—' }}</span>
+                      <span class="stacked-line-dim">
+                        <template v-if="p.marketValueUSD != null">
+                          US${{ formatMoney(p.marketValueUSD) }}
+                          <span
+                            v-if="p.assetType === 'CEDEAR'"
+                            :title="p.usesRatioValuation ? 'Valor real: calculado con ratio + precio de la acción' : 'Aproximado con el CCL general (falta ratio o precio de la acción)'"
+                          >{{ p.usesRatioValuation ? '✓' : '≈' }}</span>
+                        </template>
+                        <template v-else>—</template>
+                      </span>
+                    </div>
+                  </td>
+                  <td>
+                    <div class="stacked-cell">
+                      <span v-if="p.unrealizedARS === null">—</span>
+                      <span v-else :class="p.unrealizedARS >= 0 ? 'pl-pos' : 'pl-neg'">
+                        {{ p.unrealizedARS >= 0 ? '+' : '' }}${{ formatMoney(p.unrealizedARS) }}
+                        <span class="pct-tag">({{ formatPct(p.unrealizedARSPct) }})</span>
+                      </span>
+                      <span v-if="p.unrealizedUSD === null" class="stacked-line-dim">—</span>
+                      <span v-else class="stacked-line-dim" :class="p.unrealizedUSD >= 0 ? 'pl-pos' : 'pl-neg'">
+                        {{ p.unrealizedUSD >= 0 ? '+' : '' }}US${{ formatMoney(p.unrealizedUSD) }}
+                        <span class="pct-tag">({{ formatPct(p.unrealizedUSDPct) }})</span>
+                      </span>
+                    </div>
                   </td>
                 </tr>
               </tbody>
             </table>
           </div>
           <div class="table-hint">
-            Precio en vivo solo para CEDEARs (fuente: data912.com, cada 30s). Para acciones argentinas
-            todavía no hay precio en vivo conectado acá.
+            Precio en vivo solo para CEDEARs (fuente: data912.com, cada 30s). En "Valor actual" y
+            "Rendimiento", la línea de arriba es en pesos y la de abajo en dólares. Para CEDEARs, el
+            dólar se calcula con el ratio real contra la acción (✓); sin ratio se aproxima con el CCL
+            general (≈) — completalo a mano debajo del ticker para el número exacto.
           </div>
         </div>
 
@@ -592,29 +758,36 @@ onUnmounted(() => {
               <thead>
                 <tr>
                   <th>Ticker</th>
-                  <th>Tipo</th>
                   <th>Cantidad</th>
-                  <th>Costo prom. (ARS)</th>
-                  <th>Costo prom. (USD)</th>
-                  <th>P&L realizado (ARS)</th>
-                  <th>P&L realizado (USD)</th>
+                  <th>Costo promedio</th>
+                  <th>P&L realizado</th>
                 </tr>
               </thead>
               <tbody>
                 <tr v-for="s in summary.bySymbol" :key="s.ticker">
-                  <td class="ticker-cell">{{ s.ticker }}</td>
-                  <td><span class="badge" :class="s.assetType === 'CEDEAR' ? 'badge-cedear' : 'badge-ar'">{{ s.assetType === 'CEDEAR' ? 'CEDEAR' : 'Acción AR' }}</span></td>
+                  <td>
+                    <div class="ticker-cell">{{ s.ticker }}</div>
+                    <span class="badge" :class="s.assetType === 'CEDEAR' ? 'badge-cedear' : 'badge-ar'">{{ s.assetType === 'CEDEAR' ? 'CEDEAR' : 'Acción AR' }}</span>
+                  </td>
                   <td>{{ formatNum(s.quantity) }}</td>
-                  <td>${{ formatMoney(s.avgCost) }}</td>
-                  <td :title="s.usdIncomplete ? 'Faltan cargar CCL en alguna operación de este ticker' : ''">
-                    {{ s.usdIncomplete ? '—' : `US$${formatMoney(s.avgCostUSD)}` }}
+                  <td>
+                    <div class="stacked-cell">
+                      <span>${{ formatMoney(s.avgCost) }}</span>
+                      <span class="stacked-line-dim" :title="s.usdIncomplete ? 'Faltan cargar CCL en alguna operación de este ticker' : ''">
+                        {{ s.usdIncomplete ? '—' : `US$${formatMoney(s.avgCostUSD)}` }}
+                      </span>
+                    </div>
                   </td>
-                  <td :class="s.realizedPL >= 0 ? 'pl-pos' : 'pl-neg'">
-                    {{ s.realizedPL >= 0 ? '+' : '' }}${{ formatMoney(s.realizedPL) }}
-                  </td>
-                  <td v-if="s.usdIncomplete" :title="'Faltan cargar CCL en alguna operación de este ticker'">—</td>
-                  <td v-else :class="s.realizedPLUSD >= 0 ? 'pl-pos' : 'pl-neg'">
-                    {{ s.realizedPLUSD >= 0 ? '+' : '' }}US${{ formatMoney(s.realizedPLUSD) }}
+                  <td>
+                    <div class="stacked-cell">
+                      <span :class="s.realizedPL >= 0 ? 'pl-pos' : 'pl-neg'">
+                        {{ s.realizedPL >= 0 ? '+' : '' }}${{ formatMoney(s.realizedPL) }}
+                      </span>
+                      <span v-if="s.usdIncomplete" class="stacked-line-dim" title="Faltan cargar CCL en alguna operación de este ticker">—</span>
+                      <span v-else class="stacked-line-dim" :class="s.realizedPLUSD >= 0 ? 'pl-pos' : 'pl-neg'">
+                        {{ s.realizedPLUSD >= 0 ? '+' : '' }}US${{ formatMoney(s.realizedPLUSD) }}
+                      </span>
+                    </div>
                   </td>
                 </tr>
               </tbody>
@@ -651,10 +824,6 @@ onUnmounted(() => {
             <div class="form-field">
               <label>Cantidad</label>
               <input type="number" min="0" step="any" v-model="form.quantity" placeholder="Ej: 100" required>
-            </div>
-            <div class="form-field">
-              <label>Ratio (ej: 10, 20)</label>
-              <input type="number" min="0.001" step="any" v-model="form.ratio" placeholder="Ej: 10" required>
             </div>
             <div class="form-field">
               <label>Precio unitario ($)</label>
@@ -697,67 +866,6 @@ onUnmounted(() => {
           </div>
         </form>
 
-        <!-- Tabla de operaciones -->
-        <div class="table-header-row">
-          <div class="section-title">Historial ({{ filteredTrades.length }})</div>
-          <div class="search-box">
-            <input
-              type="text"
-              v-model="searchQuery"
-              placeholder="Buscar por ticker..."
-              style="text-transform:uppercase"
-            >
-            <button v-if="searchQuery" type="button" class="search-clear" @click="searchQuery = ''">✕</button>
-          </div>
-        </div>
-        <div class="trades-table-wrap">
-          <table class="trades-table" v-if="sortedTrades.length">
-            <thead>
-              <tr>
-                <th>Fecha</th>
-                <th>Activo</th>
-                <th>Ticker</th>
-                <th>Operación</th>
-                <th>Cantidad</th>
-                <th>Ratio</th>
-                <th>Precio (ARS)</th>
-                <th>CCL</th>
-                <th>Precio (USD)</th>
-                <th>Comisión</th>
-                <th>Total</th>
-                <th>Notas</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="t in paginatedTrades" :key="t.id" :class="{ 'row-editing': editingId === t.id }">
-                <td>{{ formatDate(t.date) }}</td>
-                <td><span class="badge" :class="t.assetType === 'CEDEAR' ? 'badge-cedear' : 'badge-ar'">{{ t.assetType === 'CEDEAR' ? 'CEDEAR' : 'Acción AR' }}</span></td>
-                <td class="ticker-cell">{{ t.ticker }}</td>
-                <td><span class="badge" :class="t.operation === 'COMPRA' ? 'badge-buy' : 'badge-sell'">{{ t.operation === 'COMPRA' ? 'Compra' : 'Venta' }}</span></td>
-                <td>{{ formatNum(t.quantity) }}</td>
-                <td>{{ t.ratio || 1 }}</td>
-                <td>${{ formatMoney(t.price) }}</td>
-                <td>{{ t.ccl ? `$${formatMoney(t.ccl)}` : '—' }}</td>
-                <td>{{ t.priceUSD != null ? `US$${formatMoney(t.priceUSD)}` : '—' }}</td>
-                <td>${{ formatMoney(t.fee) }}</td>
-                <td>${{ formatMoney(t.total) }}</td>
-                <td class="notes-cell" :title="t.notes">{{ t.notes || '—' }}</td>
-                <td class="actions-cell">
-                  <button class="icon-btn" title="Editar" @click="startEdit(t)">✎</button>
-                  <button class="icon-btn icon-btn-danger" title="Eliminar" @click="removeTrade(t)">🗑</button>
-                </td>
-              </tr>
-            </tbody>
-          </table>
-          <div v-else class="empty-state">Todavía no cargaste ninguna operación.</div>
-        </div>
-
-        <div v-if="sortedTrades.length" class="pagination-bar">
-          <button type="button" class="page-btn" :disabled="currentPage === 1" @click="goToPage(currentPage - 1)">← Anterior</button>
-          <span class="page-info">Página {{ currentPage }} de {{ totalPages }} · mostrando {{ paginatedTrades.length }} de {{ sortedTrades.length }}</span>
-          <button type="button" class="page-btn" :disabled="currentPage === totalPages" @click="goToPage(currentPage + 1)">Siguiente →</button>
-        </div>
         </template>
       </template>
     </div>
@@ -765,373 +873,250 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
-/* =========================================================
-   BITÁCORA DE TRADES — UI PROFESIONAL
-   LÓGICA Y TEMPLATE ORIGINAL SIN MODIFICACIONES
-   ========================================================= */
-
 .trades-overlay {
   position: fixed;
   inset: 0;
-  z-index: 1000;
+  background: rgba(0, 0, 0, 0.6);
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 18px;
-  background: rgba(0, 0, 0, 0.72);
-  backdrop-filter: blur(6px);
-  -webkit-backdrop-filter: blur(6px);
+  z-index: 1000;
+  padding: 24px;
 }
 
 .trades-modal {
-  box-sizing: border-box;
-  width: 100%;
-  max-width: 1480px;
-  max-height: calc(100vh - 36px);
-  overflow-x: hidden;
-  overflow-y: auto;
-  padding: 26px 30px 30px;
-  display: flex;
-  flex-direction: column;
-  gap: 22px;
   background: var(--panel);
   border: 1px solid var(--border);
-  border-radius: 16px;
-  color: var(--text);
-  font-size: 14px;
+  border-radius: 14px;
+  width: 100%;
+  max-width: 1440px;
+  max-height: 96vh;
+  overflow-y: auto;
+  padding: 32px 40px;
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+  font-size: 15px;
   line-height: 1.5;
-  box-shadow:
-    0 30px 90px rgba(0, 0, 0, 0.45),
-    0 10px 30px rgba(0, 0, 0, 0.24);
-  scrollbar-gutter: stable;
-  overscroll-behavior: contain;
 }
-
-.trades-modal::-webkit-scrollbar,
-.by-symbol-table-wrap::-webkit-scrollbar,
-.trades-table-wrap::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
-}
-
-.trades-modal::-webkit-scrollbar-track,
-.by-symbol-table-wrap::-webkit-scrollbar-track,
-.trades-table-wrap::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.trades-modal::-webkit-scrollbar-thumb,
-.by-symbol-table-wrap::-webkit-scrollbar-thumb,
-.trades-table-wrap::-webkit-scrollbar-thumb {
-  background: var(--border);
-  border-radius: 999px;
-}
-
-.trades-modal::-webkit-scrollbar-thumb:hover,
-.by-symbol-table-wrap::-webkit-scrollbar-thumb:hover,
-.trades-table-wrap::-webkit-scrollbar-thumb:hover {
-  background: var(--text-dim);
-}
-
-/* =========================
-   HEADER
-   ========================= */
 
 .trades-header {
-  position: sticky;
-  top: -26px;
-  z-index: 20;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
-  padding-bottom: 17px;
-  background: var(--panel);
   border-bottom: 1px solid var(--border);
+  padding-bottom: 20px;
 }
 
 .trades-title {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--text);
   display: flex;
   align-items: center;
-  gap: 10px;
-  color: var(--text);
-  font-size: 21px;
-  font-weight: 750;
-  line-height: 1.2;
-  letter-spacing: -0.02em;
-}
-
-.trades-icon {
-  font-size: 20px;
-  line-height: 1;
+  gap: 12px;
 }
 
 .close-btn {
-  flex: 0 0 auto;
-  width: 36px;
-  height: 36px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
   background: var(--bg);
   border: 1px solid var(--border);
-  border-radius: 9px;
+  border-radius: 8px;
   color: var(--text-dim);
+  width: 38px;
+  height: 38px;
   cursor: pointer;
-  font-size: 14px;
-  transition:
-    color .15s ease,
-    border-color .15s ease,
-    background .15s ease,
-    transform .15s ease;
+  font-size: 17px;
 }
 
 .close-btn:hover {
   color: var(--text);
   border-color: var(--text-dim);
-  background: var(--panel);
-  transform: translateY(-1px);
 }
-
-/* =========================
-   STATES
-   ========================= */
 
 .trades-loading,
 .empty-state {
   text-align: center;
   color: var(--text-dim);
-  font-size: 13px;
-  padding: 30px 20px;
+  font-size: 14px;
+  padding: 32px 0;
 }
 
 .trades-error,
 .form-error {
-  background: rgba(239, 68, 68, 0.08);
-  border: 1px solid rgba(239, 68, 68, 0.30);
+  background: rgba(239, 68, 68, 0.1);
+  border: 1px solid rgba(239, 68, 68, 0.4);
   color: #ef4444;
-  padding: 11px 14px;
-  border-radius: 9px;
-  font-size: 12px;
+  padding: 12px 14px;
+  border-radius: 8px;
+  font-size: 13px;
 }
-
-/* =========================
-   SUMMARY
-   ========================= */
 
 .summary-bar {
   display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
-  gap: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 16px;
 }
 
 .summary-card {
-  min-width: 0;
-  min-height: 82px;
-  box-sizing: border-box;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  gap: 6px;
-  padding: 13px 15px;
   background: var(--bg);
   border: 1px solid var(--border);
-  border-radius: 11px;
-  transition:
-    border-color .15s ease,
-    transform .15s ease,
-    box-shadow .15s ease;
-}
-
-.summary-card:hover {
-  border-color: var(--text-dim);
-  transform: translateY(-1px);
-  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.14);
+  border-radius: 12px;
+  padding: 18px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 
 .summary-label {
+  font-size: 12px;
   color: var(--text-dim);
-  font-size: 10px;
-  font-weight: 700;
-  line-height: 1.25;
-  letter-spacing: .045em;
-  text-transform: uppercase;
+  letter-spacing: 0.2px;
 }
 
 .summary-card strong {
-  min-width: 0;
+  font-size: 24px;
   color: var(--text);
-  font-size: 19px;
-  font-weight: 750;
-  line-height: 1.15;
   font-family: var(--font-num, inherit);
-  font-variant-numeric: tabular-nums;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
-
-.pl-pos {
-  color: #22c55e !important;
-}
-
-.pl-neg {
-  color: #ef4444 !important;
-}
-
-/* =========================
-   TABS
-   ========================= */
-
-.view-tabs {
-  display: inline-flex;
-  align-self: flex-start;
-  align-items: center;
-  gap: 5px;
-  padding: 4px;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-}
-
-.view-tab {
-  flex: 0 0 auto;
-  background: transparent;
-  border: 1px solid transparent;
-  color: var(--text-dim);
-  border-radius: 7px;
-  padding: 9px 14px;
-  font-size: 12px;
-  font-weight: 700;
-  cursor: pointer;
-  transition:
-    color .15s ease,
-    background .15s ease,
-    border-color .15s ease;
-}
-
-.view-tab:hover {
-  color: var(--text);
-  background: var(--panel);
-}
-
-.view-tab.active {
-  background: rgba(37, 99, 235, 0.12);
-  border-color: rgba(37, 99, 235, 0.45);
-  color: var(--blue, #60a5fa);
-}
-
-/* =========================
-   GENERAL
-   ========================= */
 
 .section-title {
+  font-size: 15px;
+  font-weight: 700;
   color: var(--text);
-  font-size: 12px;
-  font-weight: 750;
-  letter-spacing: .055em;
-  text-transform: uppercase;
 }
 
 .table-header-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
   flex-wrap: wrap;
+  gap: 12px;
 }
-
-/* =========================
-   SEARCH
-   ========================= */
 
 .search-box {
   position: relative;
   display: flex;
   align-items: center;
-  width: min(320px, 100%);
+  flex: 1;
+  min-width: 200px;
+  max-width: 320px;
 }
 
 .search-box input {
   width: 100%;
-  box-sizing: border-box;
-  padding: 9px 34px 9px 12px;
-  background: var(--bg);
+  background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 8px;
+  padding: 10px 32px 10px 14px;
   color: var(--text);
-  font-size: 12px;
+  font-size: 14px;
   font-family: inherit;
-  transition:
-    border-color .15s ease,
-    box-shadow .15s ease;
-}
-
-.search-box input:hover {
-  border-color: var(--text-dim);
 }
 
 .search-box input:focus {
   outline: none;
   border-color: var(--blue, #2563eb);
-  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.10);
 }
 
 .search-clear {
   position: absolute;
   right: 8px;
-  width: 24px;
-  height: 24px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
-  background: transparent;
+  background: none;
   border: none;
   color: var(--text-dim);
   cursor: pointer;
-  font-size: 11px;
+  font-size: 13px;
+  padding: 4px;
 }
 
 .search-clear:hover {
   color: var(--text);
 }
 
-/* =========================
-   FULL DETAIL
-   ========================= */
+.pagination-bar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+  padding-top: 6px;
+}
+
+.page-btn {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  border-radius: 8px;
+  padding: 9px 16px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.page-btn:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--text-dim);
+}
+
+.page-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.page-info {
+  font-size: 13px;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.view-tabs {
+  display: flex;
+  gap: 12px;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 20px;
+}
+
+.view-tab {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  border-radius: 10px;
+  padding: 12px 20px;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.view-tab:hover {
+  color: var(--text);
+  border-color: var(--text-dim);
+}
+
+.view-tab.active {
+  background: rgba(37, 99, 235, 0.15);
+  border-color: #2563eb;
+  color: var(--blue);
+}
 
 .full-detail-screen {
   display: flex;
   flex-direction: column;
-  gap: 14px;
-  min-width: 0;
+  gap: 18px;
 }
 
 .entry-cards {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 16px;
 }
 
 .entry-card {
-  min-width: 0;
-  padding: 16px 18px;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
   background: var(--bg);
   border: 1px solid var(--border);
-  border-radius: 11px;
-  transition:
-    border-color .15s ease,
-    box-shadow .15s ease;
-}
-
-.entry-card:hover {
-  border-color: var(--text-dim);
-  box-shadow: 0 7px 22px rgba(0, 0, 0, 0.13);
+  border-radius: 12px;
+  padding: 22px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
 }
 
 .entry-card-header {
@@ -1145,310 +1130,235 @@ onUnmounted(() => {
 .entry-card-title {
   display: flex;
   align-items: center;
-  gap: 7px;
+  gap: 10px;
   flex-wrap: wrap;
 }
 
 .entry-card-title .ticker-cell {
-  font-size: 16px;
+  font-size: 18px;
 }
 
 .entry-card-actions {
   display: flex;
-  align-items: center;
-  gap: 6px;
+  gap: 8px;
 }
 
 .entry-card-dates {
+  font-size: 13px;
   color: var(--text-dim);
-  font-size: 11px;
   font-family: var(--font-num, inherit);
-  font-variant-numeric: tabular-nums;
 }
 
 .entry-card-grid {
   display: grid;
-  grid-template-columns: repeat(7, minmax(105px, 1fr));
-  gap: 1px;
-  overflow: hidden;
-  background: var(--border);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-}
-
-.entry-card-grid .detail-item {
-  background: var(--bg);
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 16px;
+  padding: 16px 0;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
 }
 
 .entry-card-notes {
   display: grid;
-  grid-template-columns: 1fr;
-  gap: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 14px;
 }
 
 .detail-item {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 5px;
   min-width: 0;
-  padding: 10px 12px;
 }
 
 .detail-label {
+  font-size: 12px;
   color: var(--text-dim);
-  font-size: 9.5px;
-  font-weight: 700;
-  line-height: 1.2;
-  letter-spacing: .055em;
-  text-transform: uppercase;
 }
 
 .detail-value {
-  min-width: 0;
+  font-size: 15px;
   color: var(--text);
-  font-size: 12px;
-  font-weight: 650;
   font-family: var(--font-num, inherit);
-  font-variant-numeric: tabular-nums;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .detail-text {
-  margin: 0;
+  font-size: 14px;
   color: var(--text);
-  font-size: 12px;
-  line-height: 1.55;
+  line-height: 1.6;
   white-space: pre-wrap;
   word-break: break-word;
+  font-family: inherit;
+  margin: 0;
 }
-
-/* =========================
-   TABLES
-   ========================= */
 
 .by-symbol-table-wrap,
 .trades-table-wrap {
-  width: 100%;
-  overflow: auto;
-  background: var(--bg);
+  overflow-x: auto;
   border: 1px solid var(--border);
   border-radius: 10px;
-  scrollbar-gutter: stable;
-}
-
-.by-symbol-table-wrap {
-  max-height: 400px;
 }
 
 .by-symbol-table,
 .trades-table {
   width: 100%;
-  border-collapse: separate;
-  border-spacing: 0;
-  font-size: 11.5px;
-  font-variant-numeric: tabular-nums;
+  border-collapse: collapse;
+  font-size: 14.5px;
 }
 
 .by-symbol-table th,
 .trades-table th {
-  position: sticky;
-  top: 0;
-  z-index: 5;
-  padding: 10px 11px;
+  text-align: left;
+  padding: 14px 18px;
   background: var(--bg);
   color: var(--text-dim);
+  font-weight: 600;
+  font-size: 12.5px;
   border-bottom: 1px solid var(--border);
-  font-size: 9.5px;
-  font-weight: 750;
-  letter-spacing: .05em;
-  text-transform: uppercase;
   white-space: nowrap;
-  text-align: left;
 }
 
 .by-symbol-table td,
 .trades-table td {
-  padding: 10px 11px;
-  background: var(--bg);
-  color: var(--text);
+  padding: 14px 18px;
   border-bottom: 1px solid var(--border);
+  color: var(--text);
   white-space: nowrap;
   font-family: var(--font-num, inherit);
 }
 
-.by-symbol-table tbody tr:hover td,
-.trades-table tbody tr:hover td {
-  background: rgba(255, 255, 255, 0.018);
-}
-
-.by-symbol-table tbody tr:last-child td,
-.trades-table tbody tr:last-child td {
+.trades-table tbody tr:last-child td,
+.by-symbol-table tbody tr:last-child td {
   border-bottom: none;
 }
 
-.by-symbol-table th:not(:first-child),
-.by-symbol-table td:not(:first-child) {
-  text-align: right;
-}
-
-.by-symbol-table th:first-child,
-.by-symbol-table td:first-child {
-  text-align: left;
-}
-
-.trades-table {
-  min-width: 1180px;
-}
-
-.trades-table th:last-child,
-.trades-table td:last-child {
-  width: 1%;
-}
-
-.notes-cell {
-  max-width: 180px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  color: var(--text-dim) !important;
-  font-family: inherit !important;
-}
-
-.row-editing td {
-  background: rgba(37, 99, 235, 0.08) !important;
+.trades-table tbody tr:hover {
+  background: var(--bg);
 }
 
 .table-hint {
-  padding: 2px 2px 0;
+  font-size: 12.5px;
   color: var(--text-dim);
-  font-size: 10.5px;
-  line-height: 1.45;
+  line-height: 1.6;
+  padding: 4px 2px 0;
 }
 
 .pct-tag {
-  margin-left: 3px;
-  color: var(--text-dim);
-  font-size: 10px;
+  font-size: 12px;
+  opacity: 0.85;
 }
 
-/* =========================
-   TICKER + BADGES
-   ========================= */
-
-.ticker-cell {
-  color: var(--text);
-  font-weight: 750;
-  letter-spacing: .01em;
+.row-editing {
+  background: rgba(37, 99, 235, 0.08);
 }
 
-.badge {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 20px;
-  box-sizing: border-box;
-  padding: 3px 8px;
-  border-radius: 999px;
-  font-size: 9px;
-  font-weight: 750;
-  line-height: 1;
-  text-transform: uppercase;
+.stacked-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
   white-space: nowrap;
 }
 
+.stacked-line-dim {
+  color: var(--text-dim);
+  font-size: 0.88em;
+}
+
+.ticker-cell {
+  font-weight: 700;
+  font-size: 15px;
+}
+
+.notes-cell {
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-family: inherit;
+  color: var(--text-dim);
+}
+
+.badge {
+  display: inline-block;
+  padding: 4px 11px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  font-weight: 700;
+}
+
 .badge-cedear {
-  background: rgba(59, 130, 246, 0.12);
-  border: 1px solid rgba(59, 130, 246, 0.20);
+  background: rgba(59, 130, 246, 0.15);
   color: #60a5fa;
 }
 
 .badge-ar {
-  background: rgba(168, 85, 247, 0.12);
-  border: 1px solid rgba(168, 85, 247, 0.20);
+  background: rgba(168, 85, 247, 0.15);
   color: #c084fc;
 }
 
 .badge-buy {
-  background: rgba(34, 197, 94, 0.11);
-  border: 1px solid rgba(34, 197, 94, 0.18);
+  background: rgba(34, 197, 94, 0.15);
   color: #22c55e;
 }
 
 .badge-sell {
-  background: rgba(239, 68, 68, 0.11);
-  border: 1px solid rgba(239, 68, 68, 0.18);
+  background: rgba(239, 68, 68, 0.15);
   color: #ef4444;
 }
 
-/* =========================
-   ACTIONS
-   ========================= */
+.pl-pos {
+  color: #22c55e !important;
+}
+
+.pl-neg {
+  color: #ef4444 !important;
+}
 
 .actions-cell {
   display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 6px;
+  gap: 8px;
 }
 
 .icon-btn {
-  width: 31px;
-  height: 31px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
   background: var(--bg);
   border: 1px solid var(--border);
   border-radius: 7px;
-  color: var(--text-dim);
+  width: 32px;
+  height: 32px;
   cursor: pointer;
-  font-size: 12px;
-  transition:
-    color .15s ease,
-    border-color .15s ease,
-    background .15s ease,
-    transform .15s ease;
+  color: var(--text-dim);
+  font-size: 14px;
 }
 
 .icon-btn:hover {
   color: var(--text);
   border-color: var(--text-dim);
-  background: var(--panel);
-  transform: translateY(-1px);
 }
 
 .icon-btn-danger:hover {
   color: #ef4444;
-  border-color: rgba(239, 68, 68, .55);
-  background: rgba(239, 68, 68, .06);
+  border-color: #ef4444;
 }
 
-/* =========================
-   FORM
-   ========================= */
-
 .trade-form {
-  display: flex;
-  flex-direction: column;
-  gap: 18px;
-  padding: 19px 20px;
   background: var(--bg);
   border: 1px solid var(--border);
-  border-radius: 11px;
+  border-radius: 12px;
+  padding: 24px 26px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
 }
 
 .form-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 14px 15px;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 18px;
 }
 
 .form-field {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 7px;
   min-width: 0;
 }
 
@@ -1457,65 +1367,22 @@ onUnmounted(() => {
 }
 
 .form-field label {
+  font-size: 13px;
+  color: var(--text-dim);
+  font-weight: 600;
   display: flex;
   align-items: center;
-  gap: 5px;
-  color: var(--text-dim);
-  font-size: 10px;
-  font-weight: 700;
-  line-height: 1.2;
-  letter-spacing: .025em;
-}
-
-.form-field input,
-.form-field select {
-  width: 100%;
-  height: 41px;
-  box-sizing: border-box;
-  padding: 9px 11px;
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  color: var(--text);
-  font-size: 12px;
-  font-family: inherit;
-  font-variant-numeric: tabular-nums;
-  transition:
-    border-color .15s ease,
-    box-shadow .15s ease,
-    background .15s ease;
-}
-
-.form-field input:hover,
-.form-field select:hover {
-  border-color: var(--text-dim);
-}
-
-.form-field input::placeholder {
-  color: var(--text-dim);
-}
-
-.form-field input:focus,
-.form-field select:focus {
-  outline: none;
-  border-color: var(--blue, #2563eb);
-  box-shadow: 0 0 0 3px rgba(37, 99, 235, .10);
-}
-
-.form-field input[type='date'] {
-  color-scheme: dark;
+  gap: 6px;
 }
 
 .auto-tag {
   color: #22c55e;
-  font-weight: 650;
-  text-transform: none;
+  font-weight: 600;
 }
 
 .ccl-input-row {
   display: flex;
-  align-items: stretch;
-  gap: 7px;
+  gap: 8px;
 }
 
 .ccl-input-row input {
@@ -1524,53 +1391,81 @@ onUnmounted(() => {
 }
 
 .ccl-hint {
+  font-size: 12px;
   color: #fbbf24;
-  font-size: 10px;
-  line-height: 1.4;
+  line-height: 1.5;
 }
 
-/* =========================
-   FORM BUTTONS
-   ========================= */
+.ratio-subrow {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 6px;
+  font-size: 13px;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.ratio-subrow-ccl {
+  color: var(--text-dim);
+}
+
+.ratio-input {
+  width: 64px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 5px 8px;
+  color: var(--text);
+  font-size: 13px;
+  font-family: inherit;
+}
+
+.ratio-input:focus {
+  outline: none;
+  border-color: var(--blue, #2563eb);
+}
+
+.form-field input,
+.form-field select {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px 14px;
+  color: var(--text);
+  font-size: 15px;
+  font-family: inherit;
+  min-width: 0;
+}
+
+.form-field input:focus,
+.form-field select:focus {
+  outline: none;
+  border-color: var(--blue, #2563eb);
+}
 
 .form-actions {
   display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 8px;
-  padding-top: 1px;
-}
-
-.btn-primary,
-.btn-secondary {
-  min-height: 40px;
-  padding: 9px 17px;
-  border-radius: 8px;
-  font-size: 12px;
-  font-weight: 700;
-  font-family: inherit;
-  cursor: pointer;
-  transition:
-    background .15s ease,
-    border-color .15s ease,
-    color .15s ease,
-    transform .15s ease;
+  gap: 12px;
 }
 
 .btn-primary {
   background: #2563eb;
   border: 1px solid #2563eb;
-  color: #fff;
+  color: white;
+  border-radius: 9px;
+  padding: 13px 24px;
+  font-weight: 600;
+  font-size: 15px;
+  cursor: pointer;
 }
 
-.btn-primary:hover:not(:disabled) {
+.btn-primary:hover {
   background: #1d4ed8;
-  border-color: #1d4ed8;
-  transform: translateY(-1px);
 }
 
 .btn-primary:disabled {
-  opacity: .55;
+  opacity: 0.6;
   cursor: not-allowed;
 }
 
@@ -1578,235 +1473,34 @@ onUnmounted(() => {
   background: var(--panel);
   border: 1px solid var(--border);
   color: var(--text-dim);
+  border-radius: 9px;
+  padding: 13px 24px;
+  font-weight: 600;
+  font-size: 15px;
+  cursor: pointer;
 }
 
 .btn-secondary:hover {
   color: var(--text);
   border-color: var(--text-dim);
-  transform: translateY(-1px);
-}
-
-/* =========================
-   PAGINATION
-   ========================= */
-
-.pagination-bar {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 12px;
-  padding-top: 1px;
-}
-
-.page-btn {
-  min-height: 34px;
-  padding: 8px 13px;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  color: var(--text-dim);
-  font-size: 11px;
-  font-weight: 650;
-  cursor: pointer;
-  transition:
-    color .15s ease,
-    border-color .15s ease,
-    background .15s ease;
-}
-
-.page-btn:hover:not(:disabled) {
-  color: var(--text);
-  border-color: var(--text-dim);
-  background: var(--panel);
-}
-
-.page-btn:disabled {
-  opacity: .4;
-  cursor: not-allowed;
-}
-
-.page-info {
-  color: var(--text-dim);
-  font-size: 10.5px;
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-}
-
-/* =========================
-   ACCESSIBILITY / FOCUS
-   ========================= */
-
-button:focus-visible,
-input:focus-visible,
-select:focus-visible {
-  outline: 2px solid var(--blue, #2563eb);
-  outline-offset: 2px;
-}
-
-/* =========================
-   RESPONSIVE
-   ========================= */
-
-@media (max-width: 1250px) {
-  .summary-bar {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-
-  .entry-card-grid {
-    grid-template-columns: repeat(4, minmax(100px, 1fr));
-  }
-
-  .form-grid {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-}
-
-@media (max-width: 900px) {
-  .trades-overlay {
-    padding: 10px;
-  }
-
-  .trades-modal {
-    max-height: calc(100vh - 20px);
-    padding: 22px;
-    gap: 18px;
-  }
-
-  .trades-header {
-    top: -22px;
-  }
-
-  .summary-bar {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .entry-card-grid {
-    grid-template-columns: repeat(2, minmax(110px, 1fr));
-  }
-
-  .form-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
 }
 
 @media (max-width: 760px) {
   .trades-overlay {
     padding: 0;
   }
-
   .trades-modal {
-    width: 100%;
     max-width: 100%;
     height: 100vh;
-    max-height: none;
-    padding: 18px 15px 22px;
-    gap: 17px;
     border-radius: 0;
-    border-left: 0;
-    border-right: 0;
+    padding: 22px 18px;
+    gap: 22px;
   }
-
-  .trades-header {
-    top: -18px;
-    padding-bottom: 14px;
-  }
-
-  .trades-title {
-    font-size: 18px;
-  }
-
-  .summary-bar {
-    gap: 7px;
-  }
-
-  .summary-card {
-    min-height: 72px;
-    padding: 10px 11px;
-  }
-
-  .summary-label {
-    font-size: 9px;
-  }
-
-  .summary-card strong {
-    font-size: 16px;
-  }
-
-  .view-tabs {
-    max-width: 100%;
-    overflow-x: auto;
-    scrollbar-width: none;
-  }
-
-  .view-tabs::-webkit-scrollbar {
-    display: none;
-  }
-
-  .view-tab {
-    padding: 8px 11px;
-    font-size: 11px;
-  }
-
-  .table-header-row {
-    align-items: stretch;
-    flex-direction: column;
-  }
-
-  .search-box {
-    width: 100%;
-    max-width: none;
-  }
-
-  .entry-card {
-    padding: 14px;
-  }
-
-  .form-grid {
-    grid-template-columns: 1fr;
-  }
-
   .form-field-wide {
     grid-column: span 1;
   }
-
-  .trade-form {
-    padding: 16px;
-  }
-
-  .form-actions {
-    justify-content: stretch;
-  }
-
-  .form-actions button {
-    flex: 1;
-  }
-
-  .pagination-bar {
-    flex-wrap: wrap;
-  }
-
-  .page-info {
-    order: -1;
-    width: 100%;
-    text-align: center;
-  }
-}
-
-@media (max-width: 420px) {
-  .summary-bar {
-    grid-template-columns: 1fr;
-  }
-
   .summary-card strong {
-    font-size: 15px;
-  }
-
-  .entry-card-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .trades-title {
-    font-size: 17px;
+    font-size: 20px;
   }
 }
 </style>
