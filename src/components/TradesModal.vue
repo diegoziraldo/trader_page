@@ -720,6 +720,77 @@ onUnmounted(() => {
         </div>
 
         <template v-if="viewMode === 'form'">
+        <!-- Formulario alta / edición -->
+        <form class="trade-form" @submit.prevent="submitForm">
+          <div class="section-title">{{ editingId ? 'Editar operación' : 'Nueva operación' }}</div>
+          <div class="form-grid">
+            <div class="form-field">
+              <label>Fecha</label>
+              <input type="date" v-model="form.date" required>
+            </div>
+            <div class="form-field">
+              <label>Activo</label>
+              <select v-model="form.assetType">
+                <option value="CEDEAR">CEDEAR</option>
+                <option value="ACCION_AR">Acción argentina</option>
+              </select>
+            </div>
+            <div class="form-field">
+              <label>Ticker</label>
+              <input type="text" v-model="form.ticker" placeholder="Ej: KO, GGAL" style="text-transform:uppercase" required>
+            </div>
+            <div class="form-field">
+              <label>Operación</label>
+              <select v-model="form.operation">
+                <option value="COMPRA">Compra</option>
+                <option value="VENTA">Venta</option>
+              </select>
+            </div>
+            <div class="form-field">
+              <label>Cantidad</label>
+              <input type="number" min="0" step="any" v-model="form.quantity" placeholder="Ej: 100" required>
+            </div>
+            <div class="form-field">
+              <label>Precio unitario ($)</label>
+              <input type="number" min="0" step="any" v-model="form.price" placeholder="Ej: 5230" required>
+            </div>
+            <div class="form-field">
+              <label>Comisión ($)</label>
+              <input type="number" min="0" step="any" v-model="form.fee" placeholder="Opcional">
+            </div>
+            <div class="form-field">
+              <label>
+                Dólar CCL del día
+                <span v-if="cclLoading" class="auto-tag">(buscando...)</span>
+                <span v-else-if="cclIsAuto && form.ccl" class="auto-tag">(automático)</span>
+              </label>
+              <div class="ccl-input-row">
+                <input
+                  type="number" min="0" step="any"
+                  v-model="form.ccl"
+                  @input="onCclManualInput"
+                  placeholder="Ej: 1320.50"
+                >
+                <button type="button" class="icon-btn" title="Volver a buscar el CCL de esta fecha" @click="refetchCCL">🔄</button>
+              </div>
+              <div v-if="cclMsg" class="ccl-hint">{{ cclMsg }}</div>
+            </div>
+            <div class="form-field form-field-wide">
+              <label>Notas</label>
+              <input type="text" v-model="form.notes" placeholder="Opcional">
+            </div>
+          </div>
+
+          <div v-if="formError" class="form-error">{{ formError }}</div>
+
+          <div class="form-actions">
+            <button type="submit" class="btn-primary" :disabled="saving">
+              {{ saving ? 'Guardando...' : editingId ? 'Guardar cambios' : 'Agregar operación' }}
+            </button>
+            <button v-if="editingId" type="button" class="btn-secondary" @click="cancelEdit">Cancelar</button>
+          </div>
+        </form>
+
         <!-- Posiciones abiertas: valor de mercado y rendimiento no realizado -->
         <div v-if="openPositions.length" class="by-symbol-section">
           <div class="table-header-row">
@@ -903,77 +974,6 @@ onUnmounted(() => {
             <div v-else class="empty-state">Ningún ticker coincide con "{{ bySymbolSearch }}".</div>
           </div>
         </div>
-
-        <!-- Formulario alta / edición -->
-        <form class="trade-form" @submit.prevent="submitForm">
-          <div class="section-title">{{ editingId ? 'Editar operación' : 'Nueva operación' }}</div>
-          <div class="form-grid">
-            <div class="form-field">
-              <label>Fecha</label>
-              <input type="date" v-model="form.date" required>
-            </div>
-            <div class="form-field">
-              <label>Activo</label>
-              <select v-model="form.assetType">
-                <option value="CEDEAR">CEDEAR</option>
-                <option value="ACCION_AR">Acción argentina</option>
-              </select>
-            </div>
-            <div class="form-field">
-              <label>Ticker</label>
-              <input type="text" v-model="form.ticker" placeholder="Ej: KO, GGAL" style="text-transform:uppercase" required>
-            </div>
-            <div class="form-field">
-              <label>Operación</label>
-              <select v-model="form.operation">
-                <option value="COMPRA">Compra</option>
-                <option value="VENTA">Venta</option>
-              </select>
-            </div>
-            <div class="form-field">
-              <label>Cantidad</label>
-              <input type="number" min="0" step="any" v-model="form.quantity" placeholder="Ej: 100" required>
-            </div>
-            <div class="form-field">
-              <label>Precio unitario ($)</label>
-              <input type="number" min="0" step="any" v-model="form.price" placeholder="Ej: 5230" required>
-            </div>
-            <div class="form-field">
-              <label>Comisión ($)</label>
-              <input type="number" min="0" step="any" v-model="form.fee" placeholder="Opcional">
-            </div>
-            <div class="form-field">
-              <label>
-                Dólar CCL del día
-                <span v-if="cclLoading" class="auto-tag">(buscando...)</span>
-                <span v-else-if="cclIsAuto && form.ccl" class="auto-tag">(automático)</span>
-              </label>
-              <div class="ccl-input-row">
-                <input
-                  type="number" min="0" step="any"
-                  v-model="form.ccl"
-                  @input="onCclManualInput"
-                  placeholder="Ej: 1320.50"
-                >
-                <button type="button" class="icon-btn" title="Volver a buscar el CCL de esta fecha" @click="refetchCCL">🔄</button>
-              </div>
-              <div v-if="cclMsg" class="ccl-hint">{{ cclMsg }}</div>
-            </div>
-            <div class="form-field form-field-wide">
-              <label>Notas</label>
-              <input type="text" v-model="form.notes" placeholder="Opcional">
-            </div>
-          </div>
-
-          <div v-if="formError" class="form-error">{{ formError }}</div>
-
-          <div class="form-actions">
-            <button type="submit" class="btn-primary" :disabled="saving">
-              {{ saving ? 'Guardando...' : editingId ? 'Guardar cambios' : 'Agregar operación' }}
-            </button>
-            <button v-if="editingId" type="button" class="btn-secondary" @click="cancelEdit">Cancelar</button>
-          </div>
-        </form>
 
         </template>
       </template>
