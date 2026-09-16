@@ -17,9 +17,17 @@ const DOLARAPI_LIST_URL = 'https://dolarapi.com/v1/dolares'
 const CCL_REFRESH_MS = 60_000
 const CEDEARS_LIVE_URL = 'https://data912.com/live/arg_cedears'
 const CEDEARS_REFRESH_MS = 30_000
+// --- Precio en vivo de acciones del panel argentino (BYMA), misma fuente
+// que ya usamos para CEDEARs. Antes esto no se cargaba y por eso las
+// "Acciones argentinas" nunca mostraban precio actual. ---
+const ARG_STOCKS_LIVE_URL = 'https://data912.com/live/arg_stocks'
+const ARG_STOCKS_REFRESH_MS = 30_000
 // api.argentinadatos.com expone el CCL histórico día por día, así no hay
 // que tipearlo a mano para operaciones viejas.
 const HISTORICAL_CCL_BASE = 'https://api.argentinadatos.com/v1/cotizaciones/dolares/contadoconliqui'
+// Timeout defensivo para no dejar el spinner colgado si alguna de estas
+// fuentes públicas queda lenta o deja de responder.
+const FETCH_TIMEOUT_MS = 10_000
 
 // --- Precio en USD de la acción subyacente (mismo host que ya usamos para
 // CEDEARs, así evitamos depender de un tercero nuevo para esto) ---
@@ -55,6 +63,11 @@ let intervaloCclActual = null
 const liveCedears = ref([])
 let intervaloCedears = null
 
+// --- Precios de acciones argentinas en vivo (data912) ---
+const liveArgStocks = ref([])
+const argStocksError = ref('')
+let intervaloArgStocks = null
+
 // --- Precio en USD de la acción subyacente (data912) ---
 const usaPrices = ref({}) // { TICKER: precioUSD }
 let intervaloUsaPrices = null
@@ -72,6 +85,48 @@ const openPositionsSearch = ref('')
 const bySymbolSearch = ref('')
 const openPositionsSort = reactive({ key: null, dir: 'desc' })
 const bySymbolSort = reactive({ key: null, dir: 'desc' })
+
+// =========================================================
+// UTILIDAD: fetch con timeout + validación básica de la respuesta
+// =========================================================
+// Todas las fuentes de datos que usa este componente son APIs públicas de
+// terceros, sin SLA garantizado. Este helper evita que una request colgada
+// deje el spinner girando para siempre, y centraliza el chequeo de
+// "respuesta OK + JSON parseable" para no repetirlo en cada función.
+async function fetchJson(url, { timeoutMs = FETCH_TIMEOUT_MS } = {}) {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
+  try {
+    const res = await fetch(url, { signal: controller.signal })
+    if (!res.ok) {
+      throw new Error(`${url} respondió ${res.status}`)
+    }
+    return await res.json()
+  } catch (e) {
+    if (e.name === 'AbortError') {
+      throw new Error(`Tiempo de espera agotado consultando ${url}`)
+    }
+    throw e
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+// Valida y normaliza un panel "live" de data912 (array de { symbol, c, ... })
+// a un mapa { TICKER: precioNumerico > 0 }, descartando cualquier entrada
+// mal formada en lugar de romper toda la carga por un solo item corrupto.
+function normalizeLivePanel(list) {
+  const map = {}
+  if (!Array.isArray(list)) return map
+  for (const item of list) {
+    const symbol = String(item?.symbol ?? '').trim().toUpperCase()
+    const price = Number(item?.c)
+    if (symbol && Number.isFinite(price) && price > 0) {
+      map[symbol] = price
+    }
+  }
+  return map
+}
 
 function toggleSort(state, key) {
   if (state.key !== key) {
@@ -193,7 +248,7 @@ const openPositions = computed(() =>
     .filter((s) => s.quantity > 0)
     .map((s) => {
       const isCedear = s.assetType === 'CEDEAR'
-      const livePrice = isCedear ? getLivePrice(s.ticker) : null
+      const livePrice = getLivePrice(s.ticker, s.assetType)
       const marketValueARS = livePrice != null ? s.quantity * livePrice : null
       const unrealizedARS = marketValueARS != null ? marketValueARS - s.invested : null
       const unrealizedARSPct =
@@ -294,21 +349,25 @@ async function refreshSummary() {
 // DÓLAR CCL — en vivo (dolarapi) e histórico (argentinadatos)
 // =========================================================
 async function fetchLiveCCL() {
-  const res = await fetch(DOLARAPI_LIST_URL)
-  if (!res.ok) throw new Error('No se pudo consultar dolarapi')
-  const lista = await res.json()
-  const ccl = lista.find((d) => d.casa === 'contadoconliqui')
-  return ccl && ccl.venta ? Number(ccl.venta) : null
+  const lista = await fetchJson(DOLARAPI_LIST_URL)
+  if (!Array.isArray(lista)) throw new Error('Respuesta inesperada de dolarapi')
+  const ccl = lista.find((d) => d?.casa === 'contadoconliqui')
+  const value = ccl ? Number(ccl.venta) : null
+  return Number.isFinite(value) && value > 0 ? value : null
 }
 
 async function fetchHistoricalCCL(dateStr) {
-  if (!dateStr) return null
+  if (!dateStr || !/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return null
   const [y, m, d] = dateStr.split('-')
-  const res = await fetch(`${HISTORICAL_CCL_BASE}/${y}/${m}/${d}`)
-  if (!res.ok) return null // fin de semana / feriado / fecha sin dato
-  const data = await res.json()
+  let data
+  try {
+    data = await fetchJson(`${HISTORICAL_CCL_BASE}/${y}/${m}/${d}`)
+  } catch {
+    return null // fin de semana / feriado / fecha sin dato / fuente caída
+  }
   const row = Array.isArray(data) ? data[0] : data
-  return row && row.venta ? Number(row.venta) : null
+  const value = row ? Number(row.venta) : null
+  return Number.isFinite(value) && value > 0 ? value : null
 }
 
 async function refreshLiveCCL() {
@@ -369,17 +428,46 @@ watch(
 // =========================================================
 async function loadLiveCedears() {
   try {
-    const res = await fetch(CEDEARS_LIVE_URL)
-    if (!res.ok) throw new Error('Error consultando data912')
-    liveCedears.value = await res.json()
+    const data = await fetchJson(CEDEARS_LIVE_URL)
+    if (!Array.isArray(data)) throw new Error('Respuesta inesperada de data912 (CEDEARs)')
+    liveCedears.value = data
   } catch (e) {
     console.error('No se pudo cargar el precio en vivo de CEDEARs', e)
   }
 }
 
-function getLivePrice(ticker) {
-  const found = liveCedears.value.find((item) => String(item.symbol).toUpperCase() === ticker)
-  return found && found.c ? Number(found.c) : null
+// =========================================================
+// PRECIOS DE ACCIONES ARGENTINAS EN VIVO (data912.com, panel BYMA)
+// =========================================================
+async function loadLiveArgStocks() {
+  try {
+    const data = await fetchJson(ARG_STOCKS_LIVE_URL)
+    if (!Array.isArray(data)) throw new Error('Respuesta inesperada de data912 (acciones AR)')
+    liveArgStocks.value = data
+    argStocksError.value = ''
+  } catch (e) {
+    console.error('No se pudo cargar el precio en vivo de acciones argentinas', e)
+    // Solo mostramos el error si todavía no tenemos ningún dato cargado;
+    // si ya había un precio previo, preferimos seguir mostrándolo (levemente
+    // desactualizado) antes que taparlo con un mensaje de error.
+    if (!liveArgStocks.value.length) {
+      argStocksError.value = 'No se pudo obtener la cotización de acciones argentinas.'
+    }
+  }
+}
+
+// Precio en vivo de un ticker, según el panel que le corresponda a su
+// assetType. CEDEAR -> panel de CEDEARs; ACCION_AR -> panel de acciones
+// del Merval/BYMA. Cualquier otro tipo (o ticker no encontrado) da null,
+// y toda la UI ya está preparada para mostrar "—" en ese caso.
+function getLivePrice(ticker, assetType) {
+  const symbol = String(ticker ?? '').trim().toUpperCase()
+  if (!symbol) return null
+
+  const panel = assetType === 'ACCION_AR' ? liveArgStocks.value : liveCedears.value
+  const found = panel.find((item) => String(item?.symbol ?? '').toUpperCase() === symbol)
+  const price = found ? Number(found.c) : null
+  return Number.isFinite(price) && price > 0 ? price : null
 }
 
 // =========================================================
@@ -434,7 +522,7 @@ function getAvgHoldingDays(ticker) {
 // papel después de que lo vendiste, no es plata que tengas).
 function getTradeVsCurrent(t) {
   const isCedear = t.assetType === 'CEDEAR'
-  const livePrice = isCedear ? getLivePrice(t.ticker) : null
+  const livePrice = getLivePrice(t.ticker, t.assetType)
   const daysElapsed = daysSince(t.date)
 
   if (livePrice == null || !t.price) return { available: false, daysElapsed }
@@ -488,25 +576,23 @@ function getTradeVsCurrent(t) {
 // PRECIO EN USD DE LA ACCIÓN SUBYACENTE (data912)
 // =========================================================
 async function loadUsaPrices() {
-  try {
-    const [stocksRes, adrsRes] = await Promise.allSettled([
-      fetch(USA_STOCKS_LIVE_URL),
-      fetch(USA_ADRS_LIVE_URL),
-    ])
-    const merged = {}
-    for (const settled of [stocksRes, adrsRes]) {
-      if (settled.status !== 'fulfilled' || !settled.value.ok) continue
-      const list = await settled.value.json()
-      for (const item of list) {
-        const sym = String(item.symbol || '').toUpperCase()
-        const price = Number(item.c)
-        if (sym && price > 0) merged[sym] = price
-      }
+  const results = await Promise.allSettled([
+    fetchJson(USA_STOCKS_LIVE_URL),
+    fetchJson(USA_ADRS_LIVE_URL),
+  ])
+  const merged = {}
+  let anyOk = false
+  for (const settled of results) {
+    if (settled.status !== 'fulfilled') {
+      console.error('No se pudo cargar un panel de precios en USD', settled.reason)
+      continue
     }
-    usaPrices.value = merged
-  } catch (e) {
-    console.error('No se pudo cargar el precio en USD de las acciones subyacentes', e)
+    anyOk = true
+    Object.assign(merged, normalizeLivePanel(settled.value))
   }
+  // Si ambas fuentes fallaron, preferimos conservar los precios anteriores
+  // (mejor un dato levemente viejo que perder toda la valuación en USD).
+  if (anyOk) usaPrices.value = merged
 }
 
 function getUnderlyingPriceUSD(ticker) {
@@ -533,10 +619,8 @@ function parseRatio(raw) {
 
 async function loadCedearRatios() {
   try {
-    const res = await fetch(CEDEAR_RATIOS_URL)
-    if (!res.ok) throw new Error('No se pudo consultar la fuente de ratios')
-    const data = await res.json()
-    const items = Array.isArray(data) ? data : data.items || []
+    const data = await fetchJson(CEDEAR_RATIOS_URL)
+    const items = Array.isArray(data) ? data : data?.items || []
     for (const item of items) {
       const ticker = String(item.Cedears || item.ticker || '').toUpperCase()
       const ratio = parseRatio(item.Ratio ?? item.ratio)
@@ -601,12 +685,31 @@ function cancelEdit() {
   autofillCCL()
 }
 
+const ASSET_TYPES = ['CEDEAR', 'ACCION_AR']
+const OPERATIONS = ['COMPRA', 'VENTA']
+
 async function submitForm() {
   formError.value = ''
   const ticker = form.ticker.trim().toUpperCase()
+
+  if (!form.date || Number.isNaN(new Date(form.date).getTime())) {
+    return (formError.value = 'Ingresá una fecha válida')
+  }
+  if (!ASSET_TYPES.includes(form.assetType)) {
+    return (formError.value = 'Seleccioná un tipo de activo válido')
+  }
   if (!ticker) return (formError.value = 'Ingresá un ticker')
+  if (!OPERATIONS.includes(form.operation)) {
+    return (formError.value = 'Seleccioná una operación válida')
+  }
   if (!(Number(form.quantity) > 0)) return (formError.value = 'La cantidad debe ser mayor a 0')
   if (!(Number(form.price) > 0)) return (formError.value = 'El precio debe ser mayor a 0')
+  if (form.fee !== '' && Number(form.fee) < 0) {
+    return (formError.value = 'La comisión no puede ser negativa')
+  }
+  if (form.ccl !== '' && !(Number(form.ccl) > 0)) {
+    return (formError.value = 'El dólar CCL debe ser mayor a 0 (o dejalo vacío)')
+  }
 
   const payload = {
     date: form.date,
@@ -669,6 +772,9 @@ onMounted(() => {
   loadLiveCedears()
   intervaloCedears = setInterval(loadLiveCedears, CEDEARS_REFRESH_MS)
 
+  loadLiveArgStocks()
+  intervaloArgStocks = setInterval(loadLiveArgStocks, ARG_STOCKS_REFRESH_MS)
+
   loadUsaPrices()
   intervaloUsaPrices = setInterval(loadUsaPrices, USA_PRICES_REFRESH_MS)
 
@@ -683,6 +789,7 @@ onMounted(() => {
 onUnmounted(() => {
   if (intervaloCclActual) clearInterval(intervaloCclActual)
   if (intervaloCedears) clearInterval(intervaloCedears)
+  if (intervaloArgStocks) clearInterval(intervaloArgStocks)
   if (intervaloUsaPrices) clearInterval(intervaloUsaPrices)
 })
 </script>
@@ -979,7 +1086,7 @@ onUnmounted(() => {
                     Cantidad
                     <span v-if="openPositionsSort.key === 'quantity'" class="sort-arrow">{{ openPositionsSort.dir === 'asc' ? '▲' : '▼' }}</span>
                   </th>
-                  <th class="num sortable-th" title="Precio en vivo, solo CEDEARs (data912)" @click="toggleSort(openPositionsSort, 'livePrice')">
+                  <th class="num sortable-th" title="Precio en vivo: CEDEARs y Acciones argentinas (data912)" @click="toggleSort(openPositionsSort, 'livePrice')">
                     Precio (ARS)
                     <span v-if="openPositionsSort.key === 'livePrice'" class="sort-arrow">{{ openPositionsSort.dir === 'asc' ? '▲' : '▼' }}</span>
                   </th>
@@ -1060,12 +1167,13 @@ onUnmounted(() => {
             <div v-else class="empty-state">Ningún ticker coincide con "{{ openPositionsSearch }}".</div>
           </div>
           <div class="table-hint">
-            Precio en vivo solo para CEDEARs (fuente: data912.com, cada 30s). En "Valor actual" y
-            "Rendimiento", la línea de arriba es en pesos y la de abajo en dólares. Para CEDEARs, el
-            dólar se calcula con el ratio real contra la acción (✓); sin ratio se aproxima con el CCL
-            general (≈) — completalo a mano debajo del ticker para el número exacto. Hacé click en un
+            Precio en vivo para CEDEARs y Acciones argentinas (fuente: data912.com, cada 30s). En
+            "Valor actual" y "Rendimiento", la línea de arriba es en pesos y la de abajo en dólares.
+            Para CEDEARs, el dólar se calcula con el ratio real contra la acción (✓); sin ratio (o
+            para acciones argentinas) se aproxima con el CCL general (≈). Hacé click en un
             encabezado para ordenar.
           </div>
+          <div v-if="argStocksError" class="ccl-hint">⚠️ {{ argStocksError }}</div>
         </div>
 
         <!-- Resumen por ticker (histórico, incluye posiciones cerradas) -->
