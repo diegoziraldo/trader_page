@@ -1567,10 +1567,73 @@ onMounted(() => {
   .journal-modal {
     max-width: 100%;
     height: 100vh;
+    height: 100dvh;
+    max-height: 100dvh;
     border-radius: 0;
+    padding: 14px 12px;
+    gap: 14px;
+  }
+  .journal-title {
+    font-size: 14px;
   }
   .form-field-wide {
     grid-column: span 1;
+  }
+  .summary-bar {
+    gap: 8px;
+  }
+  .summary-card {
+    padding: 8px 10px;
+  }
+  .summary-card strong {
+    font-size: 14px;
+  }
+  .view-tabs {
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+  .view-tab {
+    flex: 1 1 auto;
+    padding: 8px 10px;
+    font-size: 11px;
+    text-align: center;
+  }
+  .journal-form {
+    padding: 12px;
+  }
+  /* 16px evita que iOS haga zoom automático al enfocar el campo */
+  .form-field input,
+  .form-field select,
+  .form-field textarea {
+    font-size: 16px;
+  }
+  .entry-card {
+    padding: 12px;
+  }
+  .form-actions {
+    flex-direction: column;
+  }
+  .form-actions button {
+    width: 100%;
+  }
+  .table-header-row {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+  }
+  .search-box {
+    width: 100%;
+    max-width: none;
+    min-width: 0;
+  }
+  .search-box input {
+    width: 100%;
+    font-size: 16px;
+  }
+  .pagination-bar {
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 8px;
   }
 }
 </style>

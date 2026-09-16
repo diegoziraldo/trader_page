@@ -58,21 +58,32 @@ function fmtPrice(stock) {
   border:1px solid var(--border);
   gap:8px;
 }
+.stock-info{ min-width:0; }
 .stock-sym{font-weight:700;font-size:12px;color:#ffffff;}
-.stock-name{font-size:10.5px;color:var(--text-dim);}
+.stock-name{
+  font-size:10.5px;color:var(--text-dim);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+}
 .ratio-row{display:flex;align-items:center;gap:4px;margin-top:3px;font-size:9.5px;color:var(--text-dim);}
 .ratio-input{
   width:36px;background:var(--panel);border:1px solid var(--border);border-radius:4px;
   color:var(--text);font-family:var(--font-num);font-size:10px;padding:2px 3px;text-align:center;outline:none;
 }
 .ratio-input:focus{border-color:var(--blue);}
-.stock-right{display:flex;flex-direction:column;align-items:flex-end;gap:2px;position:relative;}
+.stock-right{display:flex;flex-direction:column;align-items:flex-end;gap:2px;position:relative;flex-shrink:0;}
 .stock-price{font-family:var(--font-num);font-weight:700;font-size:12px;color:var(--blue);}
 .stock-change{font-size:10px;font-weight:600;}
 .remove-btn{
   position:absolute;top:-14px;right:-6px;background:transparent;border:none;color:var(--text-dim);
   font-size:14px;cursor:pointer;line-height:1;opacity:0;transition:opacity .15s;
+  padding:6px;
 }
 .stock-item:hover .remove-btn{opacity:1;}
 .remove-btn:hover{color:var(--down);}
+
+/* En dispositivos táctiles no existe hover, así que el botón de borrar
+   quedaría invisible para siempre: lo mostramos siempre en ese caso. */
+@media (hover: none) {
+  .remove-btn{ opacity: 0.7; position: static; padding: 4px 6px; }
+}
 </style>

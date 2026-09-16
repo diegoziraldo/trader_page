@@ -162,4 +162,23 @@ const priceLabel = computed(() => {
   opacity:.6;flex-shrink:0;
 }
 .btn-delete:hover{ opacity:1; }
+
+/* En celulares el layout de ancho fijo no entra en una sola línea sin
+   desbordar; achicamos los campos y, si aún así no entra, se envuelve
+   en una segunda línea en vez de cortarse. */
+@media (max-width: 480px) {
+  .alert-row{
+    flex-wrap: wrap;
+    row-gap: 6px;
+    padding: 8px;
+  }
+  .ticker{ width: 58px; font-size: 12px; }
+  .alert-type{ width: 44px; }
+  .live-price{ width: auto; flex: 1 1 auto; }
+  .diff-percent{ width: auto; }
+  .target-price{ order: 5; flex: 1 1 100%; }
+  /* Los inputs a 16px evitan que iOS haga zoom automático al tocarlos */
+  .alert-row input, .alert-row select{ font-size: 13px; }
+  .target-price{ font-size: 16px; }
+}
 </style>

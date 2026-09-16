@@ -1965,15 +1965,78 @@ onUnmounted(() => {
   .trades-modal {
     max-width: 100%;
     height: 100vh;
+    height: 100dvh;
     border-radius: 0;
-    padding: 18px 16px;
-    gap: 16px;
+    padding: 16px 12px;
+    gap: 14px;
+    font-size: 14px;
+  }
+  .trades-title {
+    font-size: 16px;
   }
   .form-field-wide {
     grid-column: span 1;
   }
+  .summary-bar {
+    gap: 10px;
+  }
+  .summary-card {
+    padding: 12px;
+  }
   .summary-card strong {
     font-size: 18px;
+  }
+  .view-tabs {
+    gap: 8px;
+    padding-bottom: 14px;
+  }
+  .view-tab {
+    flex: 1;
+    padding: 10px 8px;
+    font-size: 12.5px;
+    text-align: center;
+  }
+  .trade-form {
+    padding: 16px;
+  }
+  /* 16px evita que iOS haga zoom automático al enfocar el campo */
+  .form-field input,
+  .form-field select,
+  .ratio-input,
+  .ccl-input-row input {
+    font-size: 16px;
+  }
+  .entry-card {
+    padding: 16px;
+  }
+  .entry-card-grid {
+    grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+    gap: 12px;
+  }
+  .form-actions {
+    flex-direction: column;
+  }
+  .form-actions button {
+    width: 100%;
+  }
+  .table-header-row {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+  }
+  .search-box {
+    width: 100%;
+    max-width: none;
+    min-width: 0;
+  }
+  .search-box input {
+    width: 100%;
+    font-size: 16px;
+  }
+  .pagination-bar {
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 8px;
   }
 }
 </style>

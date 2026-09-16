@@ -1,4 +1,3 @@
-
 <script setup>
 import { ref, onMounted } from 'vue'
 import SearchBar from './components/SearchBar.vue'
@@ -47,7 +46,6 @@ onMounted(checkStorageMode)
 
 <template>
 
-  <Login />
   <!-- Barra superior: buscador + resumen macro, compacta -->
   <div class="topbar">
     <SearchBar compact />
@@ -177,5 +175,30 @@ onMounted(checkStorageMode)
 @media(max-width: 1200px){
   .main-layout{grid-template-columns:1fr; max-width:640px;}
   .center-column{flex-direction:column;} /* En pantallas chicas se apilan verticalmente por comodidad */
+}
+
+@media(max-width: 480px){
+  .topbar{
+    padding:14px 10px 0;
+  }
+  .main-layout{
+    gap:14px;
+    padding:8px 10px 10px;
+  }
+  .center-column{
+    gap:12px;
+  }
+  /* En el celular el badge fijo queda más chico y respeta el área segura
+     (notch / gesture bar) para no quedar tapado ni tapar contenido. */
+  .storage-mode-badge{
+    right:10px;
+    bottom:calc(10px + env(safe-area-inset-bottom, 0px));
+    padding:6px 10px;
+    font-size:11px;
+    max-width:calc(100vw - 20px);
+    white-space:nowrap;
+    overflow:hidden;
+    text-overflow:ellipsis;
+  }
 }
 </style>
