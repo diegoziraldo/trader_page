@@ -8,6 +8,8 @@ function formatCaucion(row) {
     tasa: row.tasa,
     dias: row.dias,
     interes: row.interes,
+    comisionBroker: row.comision_broker,
+    interesNeto: Math.round((row.interes - row.comision_broker) * 100) / 100,
     notes: row.notes,
     createdAt: row.created_at,
   };
@@ -22,6 +24,9 @@ function validateBody(body) {
     errors.push('los días deben ser un número entero mayor a 0');
   }
   if (!(Number(body.interes) >= 0)) errors.push('el interés cobrado no puede ser negativo');
+  if (body.comisionBroker !== undefined && Number(body.comisionBroker) < 0) {
+    errors.push('la comisión del broker no puede ser negativa');
+  }
   return errors;
 }
 
@@ -44,13 +49,14 @@ function create(req, res) {
   const tasa = Number(req.body.tasa);
   const dias = Number(req.body.dias);
   const interes = Number(req.body.interes);
+  const comisionBroker = Number(req.body.comisionBroker) || 0;
 
   const info = db
     .prepare(
-      `INSERT INTO cauciones (fecha, importe, tasa, dias, interes, notes)
-       VALUES (?, ?, ?, ?, ?, ?)`
+      `INSERT INTO cauciones (fecha, importe, tasa, dias, interes, comision_broker, notes)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
     )
-    .run(fecha, importe, tasa, dias, interes, notes);
+    .run(fecha, importe, tasa, dias, interes, comisionBroker, notes);
 
   const created = db.prepare('SELECT * FROM cauciones WHERE id = ?').get(info.lastInsertRowid);
   res.status(201).json(formatCaucion(created));
@@ -67,6 +73,7 @@ function update(req, res) {
     tasa: req.body.tasa ?? existing.tasa,
     dias: req.body.dias ?? existing.dias,
     interes: req.body.interes ?? existing.interes,
+    comisionBroker: req.body.comisionBroker ?? existing.comision_broker,
   };
   const errors = validateBody(merged);
   if (errors.length) return res.status(400).json({ error: errors.join(', ') });
@@ -75,7 +82,7 @@ function update(req, res) {
 
   db.prepare(
     `UPDATE cauciones SET
-      fecha = ?, importe = ?, tasa = ?, dias = ?, interes = ?, notes = ?,
+      fecha = ?, importe = ?, tasa = ?, dias = ?, interes = ?, comision_broker = ?, notes = ?,
       updated_at = datetime('now')
      WHERE id = ?`
   ).run(
@@ -84,6 +91,7 @@ function update(req, res) {
     Number(merged.tasa),
     Number(merged.dias),
     Number(merged.interes),
+    Number(merged.comisionBroker) || 0,
     notes,
     req.params.id
   );
@@ -100,13 +108,16 @@ function remove(req, res) {
 }
 
 // GET /api/cauciones/summary
-// Total de interés cobrado por cauciones — se suma al resultado general
-// de la bitácora (TradesModal.vue lo combina con el P&L de trades).
+// Total de interés neto (cobrado - comisión del broker) — se suma al
+// resultado general de la bitácora (TradesModal.vue lo combina con el
+// P&L de trades).
 function getSummary(req, res) {
   const rows = db.prepare('SELECT * FROM cauciones').all();
   const totalInteres = Math.round(rows.reduce((acc, r) => acc + Number(r.interes || 0), 0) * 100) / 100;
+  const totalComisionBroker = Math.round(rows.reduce((acc, r) => acc + Number(r.comision_broker || 0), 0) * 100) / 100;
+  const totalInteresNeto = Math.round((totalInteres - totalComisionBroker) * 100) / 100;
   const totalImporte = Math.round(rows.reduce((acc, r) => acc + Number(r.importe || 0), 0) * 100) / 100;
-  res.json({ totalInteres, totalImporte, cantidad: rows.length });
+  res.json({ totalInteres, totalComisionBroker, totalInteresNeto, totalImporte, cantidad: rows.length });
 }
 
 module.exports = { getAll, create, update, remove, getSummary };

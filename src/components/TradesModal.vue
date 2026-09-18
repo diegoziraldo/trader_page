@@ -203,6 +203,7 @@ function emptyCaucionForm() {
     tasa: '',
     dias: '',
     interes: '',
+    comisionBroker: '',
     notes: '',
   }
 }
@@ -381,15 +382,23 @@ const sortedCauciones = computed(() =>
   [...cauciones.value].sort((a, b) => b.fecha.localeCompare(a.fecha) || b.id - a.id)
 )
 
-// Interés total cobrado por cauciones — esta es la "ganancia" que se suma
-// al resultado general de la bitácora.
-const caucionesInteresTotal = computed(() =>
+// Interés total cobrado por cauciones, comisión total retenida por el
+// broker, y el neto de ambos — esta última es la "ganancia" real que se
+// suma al resultado general de la bitácora.
+const caucionesInteresBrutoTotal = computed(() =>
   Math.round(cauciones.value.reduce((acc, c) => acc + Number(c.interes || 0), 0) * 100) / 100
 )
+const caucionesComisionBrokerTotal = computed(() =>
+  Math.round(cauciones.value.reduce((acc, c) => acc + Number(c.comisionBroker || 0), 0) * 100) / 100
+)
+const caucionesInteresTotal = computed(
+  () => Math.round((caucionesInteresBrutoTotal.value - caucionesComisionBrokerTotal.value) * 100) / 100
+)
 
-// Resultado total = ganancia/pérdida realizada en trades + interés cobrado
-// en cauciones. Se calcula en el frontend (no hace falta tocar el backend)
-// porque ya tenemos ambos números cargados en esta pantalla.
+// Resultado total = ganancia/pérdida realizada en trades + interés neto de
+// cauciones (ya descontada la comisión del broker). Se calcula en el
+// frontend (no hace falta tocar el backend) porque ya tenemos ambos
+// números cargados en esta pantalla.
 const totalGeneralARS = computed(
   () => Math.round((summary.value.totals.realizedPL + caucionesInteresTotal.value) * 100) / 100
 )
@@ -837,6 +846,7 @@ function startEditCaucion(caucion) {
   caucionForm.tasa = caucion.tasa
   caucionForm.dias = caucion.dias
   caucionForm.interes = caucion.interes
+  caucionForm.comisionBroker = caucion.comisionBroker ?? 0
   caucionForm.notes = caucion.notes || ''
   // No queremos recalcular y pisar el interés real ya cargado.
   caucionInteresManual.value = true
@@ -868,6 +878,9 @@ async function submitCaucionForm() {
   if (caucionForm.interes === '' || Number(caucionForm.interes) < 0) {
     return (caucionFormError.value = 'El interés cobrado no puede ser negativo')
   }
+  if (caucionForm.comisionBroker !== '' && Number(caucionForm.comisionBroker) < 0) {
+    return (caucionFormError.value = 'La comisión del broker no puede ser negativa')
+  }
 
   const payload = {
     fecha: caucionForm.fecha,
@@ -875,6 +888,7 @@ async function submitCaucionForm() {
     tasa: Number(caucionForm.tasa),
     dias: Number(caucionForm.dias),
     interes: Number(caucionForm.interes),
+    comisionBroker: Number(caucionForm.comisionBroker) || 0,
     notes: caucionForm.notes.trim(),
   }
 
@@ -996,7 +1010,7 @@ onUnmounted(() => {
             <strong>{{ cclActual ? `$${formatMoney(cclActual)}` : '—' }}</strong>
           </div>
           <div class="summary-card">
-            <span class="summary-label">Interés cauciones (ARS)</span>
+            <span class="summary-label">Interés neto cauciones (ARS)</span>
             <strong :class="caucionesInteresTotal >= 0 ? 'pl-pos' : 'pl-neg'">
               {{ caucionesInteresTotal >= 0 ? '+' : '' }}${{ formatMoney(caucionesInteresTotal) }}
             </strong>
@@ -1202,6 +1216,17 @@ onUnmounted(() => {
                   @input="onCaucionInteresInput"
                 >
               </div>
+              <div class="form-field">
+                <label for="caucion-comision">Interés/comisión que cobra el broker (ARS)</label>
+                <input
+                  id="caucion-comision"
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  v-model="caucionForm.comisionBroker"
+                  placeholder="0.00"
+                >
+              </div>
               <div class="form-field form-field-wide">
                 <label for="caucion-notes">Notas (opcional)</label>
                 <input id="caucion-notes" type="text" v-model="caucionForm.notes" placeholder="Ej: Caución a 7 días, Banco/ALyC XX">
@@ -1259,8 +1284,18 @@ onUnmounted(() => {
                   <span class="detail-value">{{ c.dias }} días</span>
                 </div>
                 <div class="detail-item">
-                  <span class="detail-label">Interés cobrado</span>
-                  <span class="detail-value pl-pos">+${{ formatMoney(c.interes) }}</span>
+                  <span class="detail-label">Interés cobrado (bruto)</span>
+                  <span class="detail-value">${{ formatMoney(c.interes) }}</span>
+                </div>
+                <div class="detail-item">
+                  <span class="detail-label">Interés/comisión del broker</span>
+                  <span class="detail-value">−${{ formatMoney(c.comisionBroker) }}</span>
+                </div>
+                <div class="detail-item">
+                  <span class="detail-label">Interés neto</span>
+                  <span class="detail-value" :class="c.interesNeto >= 0 ? 'pl-pos' : 'pl-neg'">
+                    {{ c.interesNeto >= 0 ? '+' : '' }}${{ formatMoney(c.interesNeto) }}
+                  </span>
                 </div>
               </div>
 

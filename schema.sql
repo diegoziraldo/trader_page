@@ -80,10 +80,10 @@ CREATE TABLE IF NOT EXISTS trades (
 
 -- Cauciones bursátiles colocadas (prestar pesos a través del mercado a
 -- cambio de un interés). Cada fila es una colocación puntual: importe
--- colocado, tasa nominal anual pactada, plazo en días y el interés
--- efectivamente cobrado al vencimiento (se guarda tal cual lo carga el
--- usuario, no se recalcula, porque puede diferir un poco de la fórmula
--- teórica por redondeos o retenciones del broker).
+-- colocado, tasa nominal anual pactada, plazo en días, el interés
+-- efectivamente cobrado al vencimiento y la comisión/interés que retiene
+-- el broker por la operación (se guardan tal cual los carga el usuario, no
+-- se recalculan, porque pueden diferir un poco de la fórmula teórica).
 CREATE TABLE IF NOT EXISTS cauciones (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   fecha TEXT NOT NULL,
@@ -91,6 +91,7 @@ CREATE TABLE IF NOT EXISTS cauciones (
   tasa REAL NOT NULL,
   dias INTEGER NOT NULL,
   interes REAL NOT NULL,
+  comision_broker REAL NOT NULL DEFAULT 0,
   notes TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))

@@ -126,11 +126,19 @@ db.exec(`
     tasa REAL NOT NULL,
     dias INTEGER NOT NULL,
     interes REAL NOT NULL,
+    comision_broker REAL NOT NULL DEFAULT 0,
     notes TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
 `);
+
+// Migración en caliente: si la tabla `cauciones` ya existía de antes (sin
+// la columna `comision_broker`), se la agregamos ahora.
+const caucionesColumns = db.prepare("PRAGMA table_info(cauciones)").all().map((c) => c.name);
+if (!caucionesColumns.includes('comision_broker')) {
+  db.exec('ALTER TABLE cauciones ADD COLUMN comision_broker REAL NOT NULL DEFAULT 0;');
+}
 
 // Planilla profesional de trading (plan de trade completo, para cualquier
 // tipo de instrumento: acciones, CEDEARs, forex, futuros, cripto, opciones,

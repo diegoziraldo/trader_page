@@ -9,6 +9,7 @@ import { localStore } from '../localStore.js'
 const TABLE = 'cauciones'
 
 function formatCaucion(row) {
+  const comisionBroker = Number(row.comisionBroker || 0)
   return {
     id: row.id,
     fecha: row.fecha,
@@ -16,6 +17,8 @@ function formatCaucion(row) {
     tasa: row.tasa,
     dias: row.dias,
     interes: row.interes,
+    comisionBroker,
+    interesNeto: Math.round((row.interes - comisionBroker) * 100) / 100,
     notes: row.notes,
     createdAt: row.created_at,
   }
@@ -30,6 +33,9 @@ function validateBody(body) {
     errors.push('los días deben ser un número entero mayor a 0')
   }
   if (!(Number(body.interes) >= 0)) errors.push('el interés cobrado no puede ser negativo')
+  if (body.comisionBroker !== undefined && Number(body.comisionBroker) < 0) {
+    errors.push('la comisión del broker no puede ser negativa')
+  }
   return errors
 }
 
@@ -53,6 +59,7 @@ export async function create(body) {
     tasa: Number(body.tasa),
     dias: Number(body.dias),
     interes: Number(body.interes),
+    comisionBroker: Number(body.comisionBroker) || 0,
     notes: body.notes || '',
     created_at: now,
     updated_at: now,
@@ -76,6 +83,7 @@ export async function update(id, body) {
     tasa: body.tasa ?? existing.tasa,
     dias: body.dias ?? existing.dias,
     interes: body.interes ?? existing.interes,
+    comisionBroker: body.comisionBroker ?? existing.comisionBroker,
   }
   const errors = validateBody(merged)
   if (errors.length) throw new Error(errors.join(', '))
@@ -87,6 +95,7 @@ export async function update(id, body) {
     tasa: Number(merged.tasa),
     dias: Number(merged.dias),
     interes: Number(merged.interes),
+    comisionBroker: Number(merged.comisionBroker) || 0,
     notes: body.notes !== undefined ? body.notes : existing.notes,
     updated_at: new Date().toISOString(),
   }
@@ -106,6 +115,8 @@ export async function remove(id) {
 export async function getSummary() {
   const rows = await getAll()
   const totalInteres = Math.round(rows.reduce((acc, r) => acc + Number(r.interes || 0), 0) * 100) / 100
+  const totalComisionBroker = Math.round(rows.reduce((acc, r) => acc + Number(r.comisionBroker || 0), 0) * 100) / 100
+  const totalInteresNeto = Math.round((totalInteres - totalComisionBroker) * 100) / 100
   const totalImporte = Math.round(rows.reduce((acc, r) => acc + Number(r.importe || 0), 0) * 100) / 100
-  return { totalInteres, totalImporte, cantidad: rows.length }
+  return { totalInteres, totalComisionBroker, totalInteresNeto, totalImporte, cantidad: rows.length }
 }
