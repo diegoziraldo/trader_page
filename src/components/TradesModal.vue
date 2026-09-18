@@ -7,6 +7,12 @@ import {
   updateTrade,
   deleteTrade,
 } from '../services/tradesService'
+import {
+  getCauciones,
+  createCaucion,
+  updateCaucion,
+  deleteCaucion,
+} from '../services/caucionesService'
 
 const emit = defineEmits(['close'])
 
@@ -53,7 +59,13 @@ const errorMsg = ref('')
 const saving = ref(false)
 
 const editingId = ref(null) // null = modo "agregar", si no, id del trade en edición
-const viewMode = ref('form') // 'form' = cargar/editar, 'list' = ver todo el detalle
+const viewMode = ref('form') // 'form' = cargar/editar, 'list' = ver todo el detalle, 'cauciones' = cauciones
+
+// --- Cauciones bursátiles colocadas (importe + tasa + días -> interés) ---
+const cauciones = ref([])
+const caucionEditingId = ref(null)
+const caucionSaving = ref(false)
+const caucionFormError = ref('')
 
 // --- Dólar CCL en vivo (para "hoy" y para valuar posiciones abiertas) ---
 const cclActual = ref(null)
@@ -179,6 +191,47 @@ function emptyForm() {
 
 const form = reactive(emptyForm())
 const formError = ref('')
+
+// =========================================================
+// CAUCIONES BURSÁTILES — importe colocado, tasa (TNA), plazo en días e
+// interés cobrado al vencimiento.
+// =========================================================
+function emptyCaucionForm() {
+  return {
+    fecha: todayISO(),
+    importe: '',
+    tasa: '',
+    dias: '',
+    interes: '',
+    notes: '',
+  }
+}
+
+const caucionForm = reactive(emptyCaucionForm())
+// Si el usuario ya tocó el campo "interés cobrado" a mano, dejamos de
+// pisárselo con la sugerencia automática (importe * tasa/100 * días/365).
+const caucionInteresManual = ref(false)
+
+function suggestedCaucionInteres() {
+  const importe = Number(caucionForm.importe)
+  const tasa = Number(caucionForm.tasa)
+  const dias = Number(caucionForm.dias)
+  if (!(importe > 0) || !(tasa > 0) || !(dias > 0)) return null
+  return Math.round(importe * (tasa / 100) * (dias / 365) * 100) / 100
+}
+
+watch(
+  () => [caucionForm.importe, caucionForm.tasa, caucionForm.dias],
+  () => {
+    if (caucionInteresManual.value) return
+    const sugerido = suggestedCaucionInteres()
+    if (sugerido !== null) caucionForm.interes = sugerido
+  }
+)
+
+function onCaucionInteresInput() {
+  caucionInteresManual.value = true
+}
 
 function formatMoney(n) {
   if (n === null || n === undefined || n === '') return '—'
@@ -323,13 +376,32 @@ const filteredBySymbol = computed(() => {
   return applySort(base, bySymbolSort)
 })
 
+// Cauciones ordenadas por fecha (más reciente primero) para la solapa.
+const sortedCauciones = computed(() =>
+  [...cauciones.value].sort((a, b) => b.fecha.localeCompare(a.fecha) || b.id - a.id)
+)
+
+// Interés total cobrado por cauciones — esta es la "ganancia" que se suma
+// al resultado general de la bitácora.
+const caucionesInteresTotal = computed(() =>
+  Math.round(cauciones.value.reduce((acc, c) => acc + Number(c.interes || 0), 0) * 100) / 100
+)
+
+// Resultado total = ganancia/pérdida realizada en trades + interés cobrado
+// en cauciones. Se calcula en el frontend (no hace falta tocar el backend)
+// porque ya tenemos ambos números cargados en esta pantalla.
+const totalGeneralARS = computed(
+  () => Math.round((summary.value.totals.realizedPL + caucionesInteresTotal.value) * 100) / 100
+)
+
 async function loadAll() {
   loading.value = true
   errorMsg.value = ''
   try {
-    const [t, s] = await Promise.all([getTrades(), getTradesSummary()])
+    const [t, s, c] = await Promise.all([getTrades(), getTradesSummary(), getCauciones()])
     trades.value = t
     summary.value = s
+    cauciones.value = c
   } catch (e) {
     errorMsg.value = e.message
   } finally {
@@ -755,6 +827,89 @@ async function removeTrade(trade) {
   }
 }
 
+// =========================================================
+// CAUCIONES — alta / edición / borrado
+// =========================================================
+function startEditCaucion(caucion) {
+  caucionEditingId.value = caucion.id
+  caucionForm.fecha = caucion.fecha
+  caucionForm.importe = caucion.importe
+  caucionForm.tasa = caucion.tasa
+  caucionForm.dias = caucion.dias
+  caucionForm.interes = caucion.interes
+  caucionForm.notes = caucion.notes || ''
+  // No queremos recalcular y pisar el interés real ya cargado.
+  caucionInteresManual.value = true
+  caucionFormError.value = ''
+}
+
+function cancelCaucionEdit() {
+  caucionEditingId.value = null
+  Object.assign(caucionForm, emptyCaucionForm())
+  caucionInteresManual.value = false
+  caucionFormError.value = ''
+}
+
+async function submitCaucionForm() {
+  caucionFormError.value = ''
+
+  if (!caucionForm.fecha || Number.isNaN(new Date(caucionForm.fecha).getTime())) {
+    return (caucionFormError.value = 'Ingresá una fecha válida')
+  }
+  if (!(Number(caucionForm.importe) > 0)) {
+    return (caucionFormError.value = 'El importe debe ser mayor a 0')
+  }
+  if (!(Number(caucionForm.tasa) > 0)) {
+    return (caucionFormError.value = 'La tasa debe ser mayor a 0')
+  }
+  if (!(Number.isInteger(Number(caucionForm.dias)) && Number(caucionForm.dias) > 0)) {
+    return (caucionFormError.value = 'Los días deben ser un número entero mayor a 0')
+  }
+  if (caucionForm.interes === '' || Number(caucionForm.interes) < 0) {
+    return (caucionFormError.value = 'El interés cobrado no puede ser negativo')
+  }
+
+  const payload = {
+    fecha: caucionForm.fecha,
+    importe: Number(caucionForm.importe),
+    tasa: Number(caucionForm.tasa),
+    dias: Number(caucionForm.dias),
+    interes: Number(caucionForm.interes),
+    notes: caucionForm.notes.trim(),
+  }
+
+  caucionSaving.value = true
+  try {
+    if (caucionEditingId.value) {
+      const updated = await updateCaucion(caucionEditingId.value, payload)
+      const idx = cauciones.value.findIndex((c) => c.id === caucionEditingId.value)
+      if (idx !== -1) cauciones.value[idx] = updated
+    } else {
+      const created = await createCaucion(payload)
+      cauciones.value.push(created)
+    }
+    cancelCaucionEdit()
+  } catch (e) {
+    caucionFormError.value = e.message
+  } finally {
+    caucionSaving.value = false
+  }
+}
+
+async function removeCaucion(caucion) {
+  const ok = window.confirm(
+    `¿Borrar la caución del ${formatDate(caucion.fecha)} por $${formatMoney(caucion.importe)}?`
+  )
+  if (!ok) return
+  try {
+    await deleteCaucion(caucion.id)
+    cauciones.value = cauciones.value.filter((c) => c.id !== caucion.id)
+    if (caucionEditingId.value === caucion.id) cancelCaucionEdit()
+  } catch (e) {
+    errorMsg.value = e.message
+  }
+}
+
 function close() {
   emit('close')
 }
@@ -840,6 +995,18 @@ onUnmounted(() => {
             <span class="summary-label">CCL actual (referencia)</span>
             <strong>{{ cclActual ? `$${formatMoney(cclActual)}` : '—' }}</strong>
           </div>
+          <div class="summary-card">
+            <span class="summary-label">Interés cauciones (ARS)</span>
+            <strong :class="caucionesInteresTotal >= 0 ? 'pl-pos' : 'pl-neg'">
+              {{ caucionesInteresTotal >= 0 ? '+' : '' }}${{ formatMoney(caucionesInteresTotal) }}
+            </strong>
+          </div>
+          <div class="summary-card">
+            <span class="summary-label">Resultado total (trades + cauciones)</span>
+            <strong :class="totalGeneralARS >= 0 ? 'pl-pos' : 'pl-neg'">
+              {{ totalGeneralARS >= 0 ? '+' : '' }}${{ formatMoney(totalGeneralARS) }}
+            </strong>
+          </div>
         </div>
 
         <!-- Selector de pantalla: cargar/editar vs. ver todo el detalle -->
@@ -859,6 +1026,14 @@ onUnmounted(() => {
             @click="viewMode = 'list'"
           >
             📋 Ver todo el detalle ({{ trades.length }})
+          </button>
+          <button
+            type="button"
+            class="view-tab"
+            :class="{ active: viewMode === 'cauciones' }"
+            @click="viewMode = 'cauciones'"
+          >
+            🏦 Cauciones ({{ cauciones.length }})
           </button>
         </div>
 
@@ -985,6 +1160,117 @@ onUnmounted(() => {
             <button type="button" class="page-btn" :disabled="currentPage === 1" @click="goToPage(currentPage - 1)">← Anterior</button>
             <span class="page-info">Página {{ currentPage }} de {{ totalPages }} · mostrando {{ paginatedTrades.length }} de {{ sortedTrades.length }}</span>
             <button type="button" class="page-btn" :disabled="currentPage === totalPages" @click="goToPage(currentPage + 1)">Siguiente →</button>
+          </div>
+        </div>
+
+        <!-- ============================================================ -->
+        <!-- PANTALLA: CAUCIONES BURSÁTILES                                -->
+        <!-- ============================================================ -->
+        <div v-if="viewMode === 'cauciones'" class="full-detail-screen">
+          <form class="trade-form" @submit.prevent="submitCaucionForm">
+            <div class="section-title">{{ caucionEditingId ? 'Editar caución' : 'Nueva caución' }}</div>
+            <div class="form-grid">
+              <div class="form-field">
+                <label for="caucion-fecha">Fecha</label>
+                <input id="caucion-fecha" type="date" v-model="caucionForm.fecha" required>
+              </div>
+              <div class="form-field">
+                <label for="caucion-importe">Importe colocado (ARS)</label>
+                <input id="caucion-importe" type="number" step="0.01" min="0.01" v-model="caucionForm.importe" placeholder="0.00" required>
+              </div>
+              <div class="form-field">
+                <label for="caucion-tasa">Tasa (TNA %)</label>
+                <input id="caucion-tasa" type="number" step="0.01" min="0.01" v-model="caucionForm.tasa" placeholder="Ej: 35" required>
+              </div>
+              <div class="form-field">
+                <label for="caucion-dias">Días</label>
+                <input id="caucion-dias" type="number" step="1" min="1" v-model="caucionForm.dias" placeholder="Ej: 7" required>
+              </div>
+              <div class="form-field">
+                <label for="caucion-interes">
+                  Interés cobrado (ARS)
+                  <span v-if="!caucionInteresManual && caucionForm.interes !== ''" class="auto-tag">(sugerido)</span>
+                </label>
+                <input
+                  id="caucion-interes"
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  v-model="caucionForm.interes"
+                  placeholder="0.00"
+                  required
+                  @input="onCaucionInteresInput"
+                >
+              </div>
+              <div class="form-field form-field-wide">
+                <label for="caucion-notes">Notas (opcional)</label>
+                <input id="caucion-notes" type="text" v-model="caucionForm.notes" placeholder="Ej: Caución a 7 días, Banco/ALyC XX">
+              </div>
+            </div>
+
+            <div v-if="caucionFormError" class="form-error">{{ caucionFormError }}</div>
+
+            <div class="form-actions">
+              <button type="submit" class="btn-primary" :disabled="caucionSaving">
+                {{ caucionSaving ? 'Guardando...' : (caucionEditingId ? 'Guardar cambios' : 'Agregar caución') }}
+              </button>
+              <button v-if="caucionEditingId" type="button" class="btn-secondary" @click="cancelCaucionEdit">
+                Cancelar
+              </button>
+            </div>
+          </form>
+
+          <div class="section-title">Cauciones cargadas ({{ cauciones.length }})</div>
+
+          <div v-if="!sortedCauciones.length" class="empty-state">
+            Todavía no cargaste ninguna caución.
+          </div>
+
+          <div v-else class="entry-cards">
+            <div v-for="c in sortedCauciones" :key="c.id" class="entry-card">
+              <div class="entry-card-header">
+                <div class="entry-card-title">
+                  <span class="ticker-cell">Caución #{{ c.id }}</span>
+                  <span class="badge badge-buy">{{ c.dias }} días</span>
+                </div>
+                <div class="entry-card-actions">
+                  <button class="icon-btn" title="Editar" @click="startEditCaucion(c)">✎</button>
+                  <button class="icon-btn icon-btn-danger" title="Eliminar" @click="removeCaucion(c)">🗑</button>
+                </div>
+              </div>
+
+              <div class="entry-card-dates">{{ formatDate(c.fecha) }}</div>
+
+              <div class="entry-card-grid">
+                <div class="detail-item">
+                  <span class="detail-label">Código en base de datos</span>
+                  <span class="detail-value">#{{ c.id }}</span>
+                </div>
+                <div class="detail-item">
+                  <span class="detail-label">Importe colocado</span>
+                  <span class="detail-value">${{ formatMoney(c.importe) }}</span>
+                </div>
+                <div class="detail-item">
+                  <span class="detail-label">Tasa (TNA)</span>
+                  <span class="detail-value">{{ formatMoney(c.tasa) }}%</span>
+                </div>
+                <div class="detail-item">
+                  <span class="detail-label">Plazo</span>
+                  <span class="detail-value">{{ c.dias }} días</span>
+                </div>
+                <div class="detail-item">
+                  <span class="detail-label">Interés cobrado</span>
+                  <span class="detail-value pl-pos">+${{ formatMoney(c.interes) }}</span>
+                </div>
+              </div>
+
+              <div v-if="c.notes" class="entry-card-notes">
+                <div class="detail-item">
+                  <span class="detail-label">Notas</span>
+                  <p class="detail-text">{{ c.notes }}</p>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
 
