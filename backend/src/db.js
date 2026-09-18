@@ -115,23 +115,6 @@ if (!tradesColumns.includes('ccl')) {
   db.exec('ALTER TABLE trades ADD COLUMN ccl REAL;');
 }
 
-// Cauciones bursátiles colocadas: importe, tasa nominal anual, plazo en
-// días e interés efectivamente cobrado al vencimiento (se guarda tal cual
-// lo carga el usuario, no se recalcula desde la fórmula teórica).
-db.exec(`
-  CREATE TABLE IF NOT EXISTS cauciones (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    fecha TEXT NOT NULL,
-    importe REAL NOT NULL,
-    tasa REAL NOT NULL,
-    dias INTEGER NOT NULL,
-    interes REAL NOT NULL,
-    notes TEXT NOT NULL DEFAULT '',
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-  );
-`);
-
 // Planilla profesional de trading (plan de trade completo, para cualquier
 // tipo de instrumento: acciones, CEDEARs, forex, futuros, cripto, opciones,
 // índices, materias primas, bonos). Guarda todo lo que un trader profesional

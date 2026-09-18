@@ -4,7 +4,6 @@ import * as watchlist from '../_lib/watchlist.js';
 import * as checklist from '../_lib/checklist.js';
 import * as trades from '../_lib/trades.js';
 import * as journal from '../_lib/journal.js';
-import * as cauciones from '../_lib/cauciones.js';
 
 const app = new Hono().basePath('/api');
 
@@ -148,27 +147,6 @@ app.delete(
   '/journal/:id',
   h(async (c) => {
     await journal.remove(c.env.DB, c.req.param('id'));
-    return c.body(null, 204);
-  })
-);
-
-// ---------- Cauciones bursátiles ----------
-// OJO: la ruta /summary tiene que declararse antes de /:id, si no Hono
-// interpreta "summary" como un id.
-app.get('/cauciones/summary', h(async (c) => c.json(await cauciones.getSummary(c.env.DB))));
-app.get('/cauciones', h(async (c) => c.json(await cauciones.getAll(c.env.DB))));
-app.post(
-  '/cauciones',
-  h(async (c) => c.json(await cauciones.create(c.env.DB, await c.req.json()), 201))
-);
-app.put(
-  '/cauciones/:id',
-  h(async (c) => c.json(await cauciones.update(c.env.DB, c.req.param('id'), await c.req.json())))
-);
-app.delete(
-  '/cauciones/:id',
-  h(async (c) => {
-    await cauciones.remove(c.env.DB, c.req.param('id'));
     return c.body(null, 204);
   })
 );

@@ -78,24 +78,6 @@ CREATE TABLE IF NOT EXISTS trades (
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
--- Cauciones bursátiles colocadas (prestar pesos a través del mercado a
--- cambio de un interés). Cada fila es una colocación puntual: importe
--- colocado, tasa nominal anual pactada, plazo en días y el interés
--- efectivamente cobrado al vencimiento (se guarda tal cual lo carga el
--- usuario, no se recalcula, porque puede diferir un poco de la fórmula
--- teórica por redondeos o retenciones del broker).
-CREATE TABLE IF NOT EXISTS cauciones (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  fecha TEXT NOT NULL,
-  importe REAL NOT NULL,
-  tasa REAL NOT NULL,
-  dias INTEGER NOT NULL,
-  interes REAL NOT NULL,
-  notes TEXT NOT NULL DEFAULT '',
-  created_at TEXT NOT NULL DEFAULT (datetime('now')),
-  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-
 -- Planilla profesional de trading (plan de trade completo, para cualquier
 -- tipo de instrumento: acciones, CEDEARs, forex, futuros, cripto, opciones,
 -- índices, materias primas, bonos). Guarda todo lo que un trader profesional

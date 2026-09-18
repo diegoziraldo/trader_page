@@ -7,7 +7,6 @@ const watchlistRoutes = require('./routes/watchlist.routes');
 const checklistRoutes = require('./routes/checklist.routes');
 const tradesRoutes = require('./routes/trades.routes');
 const journalRoutes = require('./routes/journal.routes');
-const caucionesRoutes = require('./routes/cauciones.routes');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -42,7 +41,6 @@ app.use('/api/watchlist', watchlistRoutes);
 app.use('/api/checklist', checklistRoutes);
 app.use('/api/trades', tradesRoutes);
 app.use('/api/journal', journalRoutes);
-app.use('/api/cauciones', caucionesRoutes);
 
 app.listen(PORT, () => {
   console.log(`Backend escuchando en http://localhost:${PORT}`);
