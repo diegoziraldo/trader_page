@@ -114,7 +114,7 @@ onMounted(checkStorageMode)
   grid-template-columns: 260px minmax(500px, 1fr) 260px;
   gap:20px;
   width:100%;
-  max-width:1480px;
+  max-width:90%;
   margin:0 auto;
   align-items:start;
   padding:10px 16px 10px;
