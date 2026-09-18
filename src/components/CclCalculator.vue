@@ -665,4 +665,11 @@ onUnmounted(() => {
 .ccl-wait {
   color: #fbbf24 !important;
 }
+
+@media (max-width: 480px) {
+  /* 16px evita que iOS haga zoom automático al enfocar estos inputs */
+  .ticker-input-box input {
+    font-size: 16px;
+  }
+}
 </style>

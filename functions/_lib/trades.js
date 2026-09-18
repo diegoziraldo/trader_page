@@ -10,7 +10,6 @@ function formatTrade(row) {
     fee: row.fee,
     notes: row.notes,
     ccl: row.ccl,
-    ratio: row.ratio ?? 1,
     priceUSD: row.ccl ? Math.round((row.price / row.ccl) * 10000) / 10000 : null,
     total:
       row.operation === 'COMPRA'
@@ -46,14 +45,13 @@ export async function create(db, body) {
   const price = Number(body.price);
   const fee = Number(body.fee) || 0;
   const ccl = body.ccl != null && body.ccl !== '' ? Number(body.ccl) : null;
-  const ratio = Number(body.ratio) > 0 ? Number(body.ratio) : 1;
 
   const info = await db
     .prepare(
-      `INSERT INTO trades (trade_date, asset_type, ticker, operation, quantity, price, fee, notes, ccl, ratio)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO trades (trade_date, asset_type, ticker, operation, quantity, price, fee, notes, ccl)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
-    .bind(date, assetType, ticker, operation, quantity, price, fee, notes, ccl, ratio)
+    .bind(date, assetType, ticker, operation, quantity, price, fee, notes, ccl)
     .run();
 
   const created = await db.prepare('SELECT * FROM trades WHERE id = ?').bind(info.meta.last_row_id).first();
@@ -80,15 +78,12 @@ export async function update(db, id, body) {
   const ccl = body.ccl !== undefined
     ? (body.ccl === '' || body.ccl === null ? null : Number(body.ccl))
     : existing.ccl;
-  const ratio = body.ratio !== undefined
-    ? (Number(body.ratio) > 0 ? Number(body.ratio) : 1)
-    : (Number(existing.ratio) > 0 ? Number(existing.ratio) : 1);
 
   await db
     .prepare(
       `UPDATE trades SET
         trade_date = ?, asset_type = ?, ticker = ?, operation = ?,
-        quantity = ?, price = ?, fee = ?, notes = ?, ccl = ?, ratio = ?, updated_at = datetime('now')
+        quantity = ?, price = ?, fee = ?, notes = ?, ccl = ?, updated_at = datetime('now')
        WHERE id = ?`
     )
     .bind(
@@ -101,7 +96,6 @@ export async function update(db, id, body) {
       fee,
       notes,
       ccl,
-      ratio,
       id
     )
     .run();

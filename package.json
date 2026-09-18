@@ -7,14 +7,10 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "pages:dev": "npm run build && wrangler pages dev",
+    "pages:dev": "npm run build && wrangler pages dev dist --d1=DB",
     "db:create": "wrangler d1 create vue-finanzas-db",
     "db:migrate:local": "wrangler d1 execute DB --local --file=./schema.sql",
-    "db:migrate:remote": "wrangler d1 execute DB --remote --file=./schema.sql",
-    "db:migrate:ccl:local": "wrangler d1 execute DB --local --file=./migrations/001_add_ccl_to_trades.sql",
-    "db:migrate:ccl:remote": "wrangler d1 execute DB --remote --file=./migrations/001_add_ccl_to_trades.sql",
-    "db:migrate:ratio:local": "wrangler d1 execute DB --local --file=./migrations/002_add_ratio_to_trades.sql",
-    "db:migrate:ratio:remote": "wrangler d1 execute DB --remote --file=./migrations/002_add_ratio_to_trades.sql"
+    "db:migrate:remote": "wrangler d1 execute DB --remote --file=./schema.sql"
   },
   "dependencies": {
     "hono": "^4.6.0",

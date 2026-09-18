@@ -1,62 +1,54 @@
-// Persistencia de alertas. Usa API/DB cuando está disponible y localStorage
-// como respaldo cuando no hay backend o la base está temporalmente caída.
+// src/services/alertsService.js
+// Persiste las alertas de precio. Usa el backend real si está disponible;
+// si no, cae a localStorage automáticamente (ver apiAvailability.js).
 
-import { ApiUnavailableError, deleteJson, getJson, postJson, putJson } from './apiClient'
-import {
-  cacheAlerts,
-  isLocalId,
-  localCreateAlert,
-  localDeleteAlert,
-  localGetAlerts,
-  localUpdateAlert,
-} from './localStorageDb'
+import { isBackendAvailable } from './apiAvailability.js';
+import * as local from './local/alertsLocal.js';
+
+const API_URL = import.meta.env.VITE_API_URL || '/api';
 
 export async function getAlerts() {
-  try {
-    const rows = await getJson('/alerts')
-    cacheAlerts(rows)
-    return localGetAlerts()
-  } catch (error) {
-    if (error instanceof ApiUnavailableError) return localGetAlerts()
-    throw error
+  if (await isBackendAvailable()) {
+    const res = await fetch(`${API_URL}/alerts`);
+    if (!res.ok) throw new Error('Error al obtener alertas');
+    return res.json();
   }
+  return local.getAll();
 }
 
+// data: { ticker, type, price }
 export async function createAlert(data) {
-  try {
-    const created = await postJson('/alerts', data)
-    // Conserva una copia para poder seguir trabajando durante una caída.
-    cacheAlerts([created, ...localGetAlerts()])
-    return created
-  } catch (error) {
-    if (error instanceof ApiUnavailableError) return localCreateAlert(data)
-    throw error
+  if (await isBackendAvailable()) {
+    const res = await fetch(`${API_URL}/alerts`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    });
+    if (!res.ok) throw new Error('Error al crear alerta');
+    return res.json();
   }
+  return local.create(data);
 }
 
+// data: { ticker?, type?, price?, triggered? }
 export async function updateAlertRemote(id, data) {
-  if (isLocalId(id)) return localUpdateAlert(id, data)
-  try {
-    const updated = await putJson(`/alerts/${encodeURIComponent(id)}`, data)
-    cacheAlerts([updated, ...localGetAlerts().filter((row) => String(row.id) !== String(updated.id))])
-    return updated
-  } catch (error) {
-    if (error instanceof ApiUnavailableError) return localUpdateAlert(id, data)
-    throw error
+  if (await isBackendAvailable()) {
+    const res = await fetch(`${API_URL}/alerts/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    });
+    if (!res.ok) throw new Error('Error al actualizar alerta');
+    return res.json();
   }
+  return local.update(id, data);
 }
 
 export async function deleteAlertRemote(id) {
-  if (isLocalId(id)) return localDeleteAlert(id)
-  try {
-    await deleteJson(`/alerts/${encodeURIComponent(id)}`)
-    try {
-      localDeleteAlert(id)
-    } catch {
-      // No había copia cacheada: la eliminación remota ya fue exitosa.
-    }
-  } catch (error) {
-    if (error instanceof ApiUnavailableError) return localDeleteAlert(id)
-    throw error
+  if (await isBackendAvailable()) {
+    const res = await fetch(`${API_URL}/alerts/${id}`, { method: 'DELETE' });
+    if (!res.ok && res.status !== 204) throw new Error('Error al eliminar alerta');
+    return;
   }
+  return local.remove(id);
 }

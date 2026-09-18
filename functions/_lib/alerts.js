@@ -21,9 +21,6 @@ export async function create(db, body) {
   if (!['IN', 'TARGET', 'STOP_LOSS'].includes(type)) {
     throw { status: 400, message: "type debe ser 'IN', 'TARGET' o 'STOP_LOSS'" };
   }
-  if (price !== null && price !== '' && !(Number(price) > 0)) {
-    throw { status: 400, message: 'price debe ser mayor a 0' };
-  }
 
   const info = await db
     .prepare('INSERT INTO alerts (ticker, type, price) VALUES (?, ?, ?)')
@@ -41,17 +38,10 @@ export async function update(db, id, body) {
   const existing = await db.prepare('SELECT * FROM alerts WHERE id = ?').bind(id).first();
   if (!existing) throw { status: 404, message: 'Alerta no encontrada' };
 
-  const ticker = body.ticker !== undefined ? String(body.ticker).trim() : existing.ticker;
-  const type = body.type !== undefined ? body.type : existing.type;
-  const price = body.price !== undefined ? body.price : existing.price;
+  const ticker = body.ticker ?? existing.ticker;
+  const type = body.type ?? existing.type;
+  const price = body.price ?? existing.price;
   const triggered = body.triggered !== undefined ? (body.triggered ? 1 : 0) : existing.triggered;
-  if (!ticker) throw { status: 400, message: 'ticker es requerido' };
-  if (!['IN', 'TARGET', 'STOP_LOSS'].includes(type)) {
-    throw { status: 400, message: "type debe ser 'IN', 'TARGET' o 'STOP_LOSS'" };
-  }
-  if (price !== null && price !== '' && !(Number(price) > 0)) {
-    throw { status: 400, message: 'price debe ser mayor a 0' };
-  }
 
   await db
     .prepare(

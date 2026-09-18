@@ -1,77 +1,51 @@
-// Persistencia de la planilla profesional. API/DB como fuente primaria y
-// localStorage como respaldo cuando no hay backend disponible.
+// src/services/journalService.js
+// Persiste la planilla profesional de trading (plan de trade completo, para
+// cualquier instrumento: acciones, CEDEARs, forex, futuros, cripto, opciones,
+// índices, materias primas, bonos) en el backend (Express+SQLite en local,
+// Cloudflare Functions+D1 en producción).
 
-import { ApiUnavailableError, deleteJson, getJson, postJson, putJson } from './apiClient'
-import {
-  cacheJournal,
-  isLocalId,
-  localCreateJournal,
-  localDeleteJournal,
-  localGetJournal,
-  localGetJournalSummary,
-  localUpdateJournal,
-} from './localStorageDb'
-
-function hasUnsyncedJournal() {
-  return localGetJournal().some((entry) => isLocalId(entry.id))
-}
+const API_URL = import.meta.env.VITE_API_URL || '/api'
 
 export async function getJournalEntries() {
-  try {
-    const rows = await getJson('/journal')
-    cacheJournal(rows)
-    return localGetJournal()
-  } catch (error) {
-    if (error instanceof ApiUnavailableError) return localGetJournal()
-    throw error
-  }
+  const res = await fetch(`${API_URL}/journal`)
+  if (!res.ok) throw new Error('Error al obtener la planilla de trading')
+  return res.json()
 }
 
 export async function getJournalSummary() {
-  try {
-    const summary = await getJson('/journal/summary')
-    if (hasUnsyncedJournal()) return localGetJournalSummary()
-    return summary
-  } catch (error) {
-    if (error instanceof ApiUnavailableError) return localGetJournalSummary()
-    throw error
-  }
+  const res = await fetch(`${API_URL}/journal/summary`)
+  if (!res.ok) throw new Error('Error al obtener el resumen de la planilla')
+  return res.json()
 }
 
+// data: ver JournalModal.vue -> emptyForm() para la forma completa del payload
 export async function createJournalEntry(data) {
-  try {
-    const created = await postJson('/journal', data)
-    cacheJournal([created, ...localGetJournal().filter((row) => String(row.id) !== String(created.id))])
-    return created
-  } catch (error) {
-    if (error instanceof ApiUnavailableError) return localCreateJournal(data)
-    throw error
+  const res = await fetch(`${API_URL}/journal`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  })
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}))
+    throw new Error(body.error || 'Error al crear el registro')
   }
+  return res.json()
 }
 
 export async function updateJournalEntry(id, data) {
-  if (isLocalId(id)) return localUpdateJournal(id, data)
-  try {
-    const updated = await putJson(`/journal/${encodeURIComponent(id)}`, data)
-    cacheJournal([updated, ...localGetJournal().filter((row) => String(row.id) !== String(updated.id))])
-    return updated
-  } catch (error) {
-    if (error instanceof ApiUnavailableError) return localUpdateJournal(id, data)
-    throw error
+  const res = await fetch(`${API_URL}/journal/${id}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  })
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}))
+    throw new Error(body.error || 'Error al actualizar el registro')
   }
+  return res.json()
 }
 
 export async function deleteJournalEntry(id) {
-  if (isLocalId(id)) return localDeleteJournal(id)
-  try {
-    await deleteJson(`/journal/${encodeURIComponent(id)}`)
-    try {
-      localDeleteJournal(id)
-    } catch {
-      // No había copia local: la eliminación remota ya fue exitosa.
-    }
-  } catch (error) {
-    if (error instanceof ApiUnavailableError) return localDeleteJournal(id)
-    throw error
-  }
+  const res = await fetch(`${API_URL}/journal/${id}`, { method: 'DELETE' })
+  if (!res.ok && res.status !== 204) throw new Error('Error al eliminar el registro')
 }

@@ -100,4 +100,10 @@ function handleAdd() {
   overflow-y:auto;
 }
 .empty{font-size:11px;color:var(--text-dim);text-align:center;padding:10px 0;}
+
+@media (max-width: 480px) {
+  .ticker-input-box input,
+  .ticker-input-box button{ font-size:16px; padding:8px 10px; }
+  .stock-list{ max-height:none; }
+}
 </style>

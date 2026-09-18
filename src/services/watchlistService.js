@@ -1,48 +1,43 @@
-// Persistencia de la watchlist USA. API/DB como fuente primaria y
-// localStorage como respaldo cuando no hay backend disponible.
+// src/services/watchlistService.js
+// Persiste la watchlist de "Acciones USA". Usa el backend real si está
+// disponible; si no, cae a localStorage automáticamente (con la misma
+// siembra por defecto que trae schema.sql). Ver apiAvailability.js.
 
-import { ApiUnavailableError, deleteJson, getJson, postJson } from './apiClient'
-import {
-  cacheWatchlist,
-  hasLocalOnlyWatchlistSymbol,
-  localAddWatchlist,
-  localGetWatchlist,
-  localRemoveWatchlist,
-} from './localStorageDb'
+import { isBackendAvailable } from './apiAvailability.js';
+import * as local from './local/watchlistLocal.js';
+
+const API_URL = import.meta.env.VITE_API_URL || '/api';
 
 export async function getUsWatchlist() {
-  try {
-    const rows = await getJson('/watchlist/us')
-    cacheWatchlist(rows)
-    return localGetWatchlist()
-  } catch (error) {
-    if (error instanceof ApiUnavailableError) return localGetWatchlist()
-    throw error
+  if (await isBackendAvailable()) {
+    const res = await fetch(`${API_URL}/watchlist/us`);
+    if (!res.ok) throw new Error('Error al obtener la watchlist');
+    return res.json();
   }
+  return local.getAll();
 }
 
+// data: { symbol, name? }
 export async function addUsWatchlistTicker(data) {
-  try {
-    const saved = await postJson('/watchlist/us', data)
-    cacheWatchlist([saved, ...localGetWatchlist().filter((row) => row.symbol !== saved.symbol)])
-    return saved
-  } catch (error) {
-    if (error instanceof ApiUnavailableError) return localAddWatchlist(data)
-    throw error
+  if (await isBackendAvailable()) {
+    const res = await fetch(`${API_URL}/watchlist/us`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    });
+    if (!res.ok) throw new Error('Error al agregar el ticker');
+    return res.json();
   }
+  return local.create(data);
 }
 
 export async function removeUsWatchlistTicker(symbol) {
-  if (hasLocalOnlyWatchlistSymbol(symbol)) return localRemoveWatchlist(symbol)
-  try {
-    await deleteJson(`/watchlist/us/${encodeURIComponent(symbol)}`)
-    try {
-      localRemoveWatchlist(symbol)
-    } catch {
-      // No había copia local: la eliminación remota ya fue exitosa.
-    }
-  } catch (error) {
-    if (error instanceof ApiUnavailableError) return localRemoveWatchlist(symbol)
-    throw error
+  if (await isBackendAvailable()) {
+    const res = await fetch(`${API_URL}/watchlist/us/${encodeURIComponent(symbol)}`, {
+      method: 'DELETE',
+    });
+    if (!res.ok && res.status !== 204) throw new Error('Error al eliminar el ticker');
+    return;
   }
+  return local.remove(symbol);
 }

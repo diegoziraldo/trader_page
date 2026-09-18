@@ -1,285 +1,109 @@
 # Vue Finanzas
 
-Dashboard financiero con **Vue 3 + Vite**, **Cloudflare Pages Functions + D1**
-y un backend opcional **Express + SQLite** para desarrollo independiente.
-
-La persistencia ahora tiene una única interfaz desde el frontend:
-
-1. intenta usar `/api`;
-2. si `/api` responde correctamente, guarda en D1 (Cloudflare) o SQLite (Express);
-3. si la API no existe, está caída o D1 no está configurado, usa un respaldo local en `localStorage` del navegador.
-
-Un error real de validación o de datos (`400`, `404`, etc.) **no** se oculta con
-el respaldo local. Solo se activa cuando la infraestructura de persistencia no
-está disponible (`502/503/504`, timeout, error de red o una ruta que devuelve
-HTML en vez de JSON).
+Dashboard financiero (dólar/riesgo país, watchlist de acciones USA, CEDEARs,
+alertas de precio, checklist de compra, bitácora de trades) hecho con
+**Vue 3 + Vite** en el frontend y **Cloudflare Pages Functions + D1** como
+backend/base de datos. Todo corre en un solo proyecto de Cloudflare.
 
 ## Estructura
 
-```text
-src/
-├── App.vue
-├── components/
-├── composables/
-├── data/
-└── services/
-    ├── apiClient.js         # cliente API único + clasificación de errores
-    ├── localStorageDb.js    # respaldo local cuando no hay backend
-    └── *Service.js          # persistencia de cada módulo
+```
+src/                    # Frontend Vue 3
+├── App.vue             # Layout de 3 columnas, conecta todo
+├── components/         # SearchBar, FinanceTicker, StockPanel, AlertsPanel, Checklist, TradesModal, JournalModal, etc.
+├── composables/        # Estado reactivo (useDolar, useStocks, useAlerts, useEarnings...)
+├── data/                # Listas estáticas (tickers con CEDEAR, ranking S&P 500)
+└── services/            # Llamadas a APIs externas (Finnhub, dolarapi) y a /api (propio backend)
 
-functions/
-├── api/[[route]].js         # API Hono para Cloudflare Pages Functions
-└── _lib/                    # lógica de alerts/watchlist/checklist/trades/journal
+functions/               # Backend: Cloudflare Pages Functions
+├── api/[[route]].js     # Router único (Hono) para todo /api/*
+└── _lib/                # Lógica de cada recurso (alerts, watchlist, checklist, trades, journal) usando D1
 
-backend/
-└── src/
-    ├── db.js                # SQLite local; usa el mismo schema.sql que D1
-    ├── server.js
-    ├── controllers/
-    └── routes/
-
-schema.sql                   # schema canónico compartido por D1 y SQLite
-migrations/
-├── 001_add_ccl_to_trades.sql
-└── 002_add_ratio_to_trades.sql
-wrangler.toml                # binding D1 + configuración Pages local
+schema.sql               # Definición de tablas D1 + seed inicial
+migrations/               # Migraciones puntuales para bases D1/SQLite ya existentes
+wrangler.toml             # Config de Cloudflare (build output, binding de D1)
 ```
 
-## Desarrollo con Cloudflare Pages + D1 local
-
-Instalá dependencias y copiá `.env.example`:
+## Desarrollo local
 
 ```bash
 npm install
 cp .env.example .env
-```
+# Editá .env y pegá tu clave de Finnhub (gratis en https://finnhub.io/register)
 
-En `.env` configurá solamente la clave de Finnhub si vas a usar cotizaciones:
-
-```env
-VITE_FINNHUB_API_KEY=tu_clave
-VITE_API_URL=
-```
-
-`VITE_API_URL` queda vacío para que el frontend use `/api`, que en Cloudflare
-Pages apunta al mismo proyecto.
-
-### 1. Crear D1
-
-```bash
+# 1) Creá la base de datos D1 (una sola vez)
 npx wrangler d1 create vue-finanzas-db
-```
+# Copiá el "database_id" que te devuelve y pegalo en wrangler.toml
 
-Copiá el `database_id` que devuelve Wrangler a `wrangler.toml`.
-
-El binding debe llamarse **DB**, porque el código usa `c.env.DB`.
-
-### 2. Crear el schema local
-
-```bash
+# 2) Aplicá el schema a la base local
 npm run db:migrate:local
-```
 
-Para una base nueva, `schema.sql` ya contiene `ccl` y `ratio` en `trades`.
-
-### 3. Levantar Pages Functions + D1 local
-
-```bash
+# 3) Levantá todo (build + Pages Functions + D1 local) en http://localhost:8788
 npm run pages:dev
 ```
 
-Wrangler usará el `pages_build_output_dir` del `wrangler.toml` y el binding D1
-configurado para Pages local.
+Si preferís el hot-reload de Vite mientras programás el frontend, corré
+`npm run pages:dev` en una terminal y `npm run dev` en otra: el proxy de
+`vite.config.js` reenvía `/api` al puerto 8788.
 
-También podés ejecutar el frontend con hot reload:
+## Deploy a producción (Cloudflare Pages)
 
-```bash
-# Terminal 1
-npm run pages:dev
+1. **Creá la base D1 remota** (si no la creaste antes):
+   ```bash
+   npx wrangler d1 create vue-finanzas-db
+   ```
+   Guardá el `database_id` en `wrangler.toml`.
 
-# Terminal 2
-npm run dev
-```
+2. **Aplicá el schema en producción**:
+   ```bash
+   npm run db:migrate:remote
+   ```
 
-El proxy de `vite.config.js` reenvía `/api` a `http://localhost:8788`.
+3. **Conectá el binding de D1 en el proyecto de Cloudflare Pages**: Dashboard
+   → tu proyecto → Settings → Functions → D1 database bindings → agregá
+   `DB` → `vue-finanzas-db`. (Si tu proyecto ya está enlazado a este repo de
+   GitHub, esto es lo único que faltaba para que la base de datos funcione).
 
-## Backend opcional: Express + SQLite
+4. **Variables de entorno del build** (Settings → Environment variables):
+   `VITE_FINNHUB_API_KEY` con tu clave. `VITE_API_URL` dejalo vacío (usa
+   rutas relativas `/api`, mismo dominio).
 
-No hace falta para Cloudflare. Sirve cuando querés ejecutar una API local
-tradicional.
+5. Hacé push a GitHub — Cloudflare Pages buildea (`npm run build`, output
+   `dist`) y despliega el frontend + las funciones de `/functions` juntos.
 
-```bash
-cd backend
-npm install
-cp .env.example .env
-npm start
-```
+## Qué es 100% en vivo y qué es calculado
 
-Por defecto queda en:
+| Dato | Fuente | Notas |
+|---|---|---|
+| Dólar Oficial/Blue/MEP/CCL | dolarapi.com | En vivo, sin API key |
+| Riesgo País | argentinadatos.com | En vivo, sin API key |
+| Acciones USA (AAPL, TSLA, etc.) | Finnhub | En vivo, requiere API key gratis |
+| CEDEARs (GGAL.BA, YPFD.BA, etc.) | Calculado | `(precio USD Finnhub ÷ ratio) × CCL`. Finnhub no cubre BYMA en el plan gratis. |
+| Alertas, checklist, trades, planilla profesional, watchlist | Cloudflare D1 | Persistido en la base de datos propia, vía `/api/*` |
 
-```text
-http://localhost:3001/api
-```
+Los ratios de CEDEARs son editables desde la UI (campo "Ratio").
 
-Podés indicar en la raíz del frontend:
+## Rendimiento en pesos y en dólares (CCL) de tus CEDEARs
 
-```env
-VITE_API_URL=http://localhost:3001
-```
+La bitácora de trades ("📒 Mis Trades") calcula, para cada ticker, el
+resultado realizado y el costo promedio tanto en pesos como en dólares:
 
-El cliente agrega `/api` automáticamente, por lo que también acepta:
+- Cada operación guarda el **dólar CCL** vigente ese día (autocompletado: en
+  vivo vía dolarapi.com si la fecha es hoy, o histórico vía
+  api.argentinadatos.com si es una fecha pasada; siempre editable a mano).
+- Con eso, el costo y el resultado realizado de cada venta se calculan en
+  USD igual que en ARS (precio ARS ÷ CCL de ese día), usando costo promedio
+  ponderado (PPC).
+- Para las posiciones abiertas de CEDEARs, además se trae el precio actual
+  en vivo (data912.com) y se muestra el valor de mercado y el rendimiento
+  no realizado en ARS y en USD, igual que en el estado de cuenta de un
+  broker.
 
-```env
-VITE_API_URL=http://localhost:3001/api
-```
+Si a alguna operación de un ticker le falta el CCL, esa fila se muestra con
+"—" en vez de un número (en lugar de calcular mal), hasta que la completes.
 
-SQLite usa automáticamente:
+## Notas sobre las alarmas de precio
 
-```text
-backend/data/dashboard.db
-```
-
-y toma las tablas desde el `schema.sql` de la raíz para evitar que SQLite y D1
-terminen con estructuras distintas.
-
-## Producción en Cloudflare Pages
-
-### 1. D1 remoto
-
-Si la base todavía no existe:
-
-```bash
-npx wrangler d1 create vue-finanzas-db
-```
-
-Guardá el `database_id` en `wrangler.toml`.
-
-### 2. Schema remoto
-
-Para una base nueva:
-
-```bash
-npm run db:migrate:remote
-```
-
-### 3. Binding del proyecto Pages
-
-En Cloudflare Dashboard:
-
-```text
-Workers & Pages
-→ tu proyecto Pages
-→ Settings
-→ Bindings
-→ D1 database bindings
-→ Variable name: DB
-→ Database: vue-finanzas-db
-```
-
-Después de modificar un binding, redeployá el proyecto.
-
-### 4. Variables de build
-
-Configurá:
-
-```env
-VITE_FINNHUB_API_KEY=tu_clave
-VITE_API_URL=
-```
-
-No pongas la clave de Finnhub dentro del código fuente.
-
-## Bases existentes: migraciones
-
-Si ya tenés una base anterior a la versión con CCL/ratio, no vuelvas a ejecutar
-`ALTER TABLE` a ciegas. Usá las migraciones correspondientes solo una vez:
-
-```bash
-# Local
-npm run db:migrate:ccl:local
-npm run db:migrate:ratio:local
-
-# Remoto
-npm run db:migrate:ccl:remote
-npm run db:migrate:ratio:remote
-```
-
-Si una base vieja ya tiene alguna de esas columnas, esa migración no debe
-repetirse porque SQLite/D1 devolverá `duplicate column name`.
-
-## Diagnóstico de conexión
-
-Cloudflare / Pages:
-
-```text
-GET /api/health
-GET /api/db-check
-```
-
-SQLite / Express:
-
-```text
-GET http://localhost:3001/api/health
-GET http://localhost:3001/api/db-check
-```
-
-`/api/db-check` ahora es de solo lectura: ejecuta `SELECT 1` y no agrega filas
-a `ping` cada vez que se consulta.
-
-Si D1 no está configurado en Pages, la API devuelve:
-
-```json
-{
-  "error": "La base de datos D1 no está configurada para este entorno",
-  "code": "DB_UNAVAILABLE"
-}
-```
-
-El frontend detecta ese caso como indisponibilidad y pasa al respaldo local.
-
-## Qué significa trabajar sin base de datos
-
-Cuando no existe D1 ni SQLite/Express, estos módulos siguen funcionando con
-`localStorage`:
-
-- Alertas
-- Watchlist USA
-- Checklist e indicadores
-- Mis Trades
-- Planilla profesional de trading
-
-Los registros creados sin backend reciben IDs negativos para diferenciarlos de
-los registros persistidos en la base.
-
-Este respaldo es **por navegador/dispositivo**: no sincroniza automáticamente
-entre computadoras, usuarios o teléfonos. Cuando el backend vuelve a estar
-disponible, los datos ya remotos continúan sincronizados; los registros locales
-nuevos quedan identificados como locales hasta que se migren manualmente.
-
-## Persistencia de Trades y CEDEARs
-
-La tabla `trades` guarda:
-
-- fecha
-- tipo de activo
-- ticker
-- compra/venta
-- cantidad
-- precio
-- comisión
-- notas
-- CCL
-- ratio CEDEAR
-
-El cálculo de precio en USD y el resumen de resultados usan el mismo formato en
-D1, SQLite y el respaldo local del navegador.
-
-## Fuentes de cotizaciones
-
-| Dato | Fuente |
-|---|---|
-| Dólar Oficial / Blue / MEP / CCL | dolarapi.com |
-| Riesgo País | argentinadatos.com |
-| Acciones USA | Finnhub |
-| CEDEARs | cálculo `(precio USD ÷ ratio) × CCL` |
-| Persistencia | D1 / SQLite / localStorage fallback |
+Precios en vivo vía Finnhub (no Yahoo Finance, para evitar problemas de CORS
+en el navegador). El calendario de balances (`earningsService.js`) también
+usa Finnhub, filtrado a compañías con CEDEAR en BYMA.
