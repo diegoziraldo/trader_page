@@ -7,3 +7,5 @@ pages_build_output_dir = "dist"
 binding = "DB"
 database_name = "vue-finanzas-db"
 database_id = "8262aeee-f264-49d9-b0b9-43fd783af8df"
+# Binding usado por Wrangler durante Pages local/dev.
+preview_database_id = "DB"

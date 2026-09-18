@@ -12,6 +12,7 @@ function formatTrade(row) {
     fee: row.fee,
     notes: row.notes,
     ccl: row.ccl,
+    ratio: row.ratio ?? 1,
     // Precio de esta operación puntual, convertido a USD con el CCL que
     // estaba vigente ese día (si se cargó).
     priceUSD: row.ccl ? Math.round((row.price / row.ccl) * 10000) / 10000 : null,
@@ -53,13 +54,14 @@ function create(req, res) {
   const price = Number(req.body.price);
   const fee = Number(req.body.fee) || 0;
   const ccl = req.body.ccl != null && req.body.ccl !== '' ? Number(req.body.ccl) : null;
+  const ratio = Number(req.body.ratio) > 0 ? Number(req.body.ratio) : 1;
 
   const info = db
     .prepare(
-      `INSERT INTO trades (trade_date, asset_type, ticker, operation, quantity, price, fee, notes, ccl)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO trades (trade_date, asset_type, ticker, operation, quantity, price, fee, notes, ccl, ratio)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
-    .run(date, assetType, ticker, operation, quantity, price, fee, notes, ccl);
+    .run(date, assetType, ticker, operation, quantity, price, fee, notes, ccl, ratio);
 
   const created = db.prepare('SELECT * FROM trades WHERE id = ?').get(info.lastInsertRowid);
   res.status(201).json(formatTrade(created));
@@ -86,11 +88,14 @@ function update(req, res) {
   const ccl = req.body.ccl !== undefined
     ? (req.body.ccl === '' || req.body.ccl === null ? null : Number(req.body.ccl))
     : existing.ccl;
+  const ratio = req.body.ratio !== undefined
+    ? (Number(req.body.ratio) > 0 ? Number(req.body.ratio) : 1)
+    : (Number(existing.ratio) > 0 ? Number(existing.ratio) : 1);
 
   db.prepare(
     `UPDATE trades SET
       trade_date = ?, asset_type = ?, ticker = ?, operation = ?,
-      quantity = ?, price = ?, fee = ?, notes = ?, ccl = ?, updated_at = datetime('now')
+      quantity = ?, price = ?, fee = ?, notes = ?, ccl = ?, ratio = ?, updated_at = datetime('now')
      WHERE id = ?`
   ).run(
     merged.date,
@@ -102,6 +107,7 @@ function update(req, res) {
     fee,
     notes,
     ccl,
+    ratio,
     req.params.id
   );
 

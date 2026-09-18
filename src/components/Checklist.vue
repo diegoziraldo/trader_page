@@ -422,23 +422,4 @@ onMounted(() => {
 
 .panel-collapsed-checklist #tv-checklist-body,
 .panel-collapsed-checklist .panel-footer-checklist { display:none !important; }
-
-@media (max-width: 480px) {
-  /* 16px evita el zoom automático de iOS al enfocar estos inputs de texto */
-  #chk-new-ticker-input,
-  .chk-add-indicator-row input[type="text"] {
-    font-size: 16px;
-  }
-  #tv-checklist-body { max-height: none; }
-  .chk-btn-delete-indicator, .chk-btn-delete-ticker {
-    padding: 8px; /* área táctil más generosa */
-  }
-  .chk-item-row input[type="checkbox"] {
-    width: 18px; height: 18px;
-  }
-  .panel-footer-checklist { flex-direction: column; }
-  #chk-new-ticker-input, #chk-new-ticker-sector, #chk-add-ticker-btn {
-    width: 100%;
-  }
-}
 </style>

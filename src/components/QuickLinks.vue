@@ -191,17 +191,15 @@ button.quick-link {
 
   .quick-links {
     justify-content: flex-start;
-    width: 100%;
-    gap: 10px;
 
-    padding-left: 12px;
-    padding-right: 12px;
+    padding-left: 2px;
+    padding-right: 2px;
   }
 
   .quick-link {
-    height: 34px;
+    height: 30px;
 
-    padding: 0 12px;
+    padding: 0 10px;
 
     font-size: 11px;
   }

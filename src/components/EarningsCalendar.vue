@@ -56,17 +56,4 @@ function onSelect(dia, e) {
 }
 .earnings-select option{ background:var(--panel-alt, #14171f);color:#fff;font-weight:600; }
 .earnings-error{ font-size:10.5px;color:var(--down); }
-
-@media (max-width: 480px) {
-  /* 5 columnas apretadas en ~300px de ancho quedan ilegibles: en vez de
-     achicar todo, dejamos que se deslice horizontalmente con un ancho
-     mínimo razonable por día. */
-  .earnings-cols{
-    overflow-x: auto;
-    -webkit-overflow-scrolling: touch;
-    padding-bottom: 2px;
-  }
-  .earnings-col{ flex: 0 0 90px; min-width: 90px; }
-  .earnings-select{ font-size: 11px; padding: 7px 4px; }
-}
 </style>

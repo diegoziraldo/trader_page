@@ -59,11 +59,4 @@ function onKeypress(e) {
   transition:all .2s;
 }
 .search-btn:hover{border-color:var(--text-dim);color:var(--text);}
-
-@media (max-width: 480px) {
-  /* 16px evita el zoom automático de iOS al enfocar el input */
-  .search-shell input{ font-size:16px; }
-  .search-shell{ padding:0 14px;height:46px; }
-  .search-btn{ width:100%; padding:10px; }
-}
 </style>

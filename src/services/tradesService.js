@@ -1,74 +1,77 @@
-// src/services/tradesService.js
-// Persiste la bitácora de operaciones (CEDEARs / acciones argentinas).
-//
-// Si hay un backend real corriendo (Express local o Cloudflare Pages
-// Functions), lo usa igual que siempre. Si no lo detecta, guarda todo en
-// el navegador (localStorage) automáticamente — así el proyecto funciona
-// con un `npm run dev` solo, sin instalar SQLite ni levantar nada más.
-// El resto de la app (TradesModal.vue, etc.) no necesita saber cuál de
-// los dos modos está activo: la firma de estas funciones no cambia.
+// Persistencia de trades. API/DB como fuente primaria y localStorage como
+// respaldo cuando no hay backend disponible.
 
-import { isBackendAvailable } from './apiAvailability.js'
-import * as local from './local/tradesLocal.js'
+import { ApiUnavailableError, deleteJson, getJson, postJson, putJson } from './apiClient'
+import {
+  cacheTrades,
+  isLocalId,
+  localCreateTrade,
+  localDeleteTrade,
+  localGetTrades,
+  localGetTradesSummary,
+  localUpdateTrade,
+} from './localStorageDb'
 
-const API_URL = import.meta.env.VITE_API_URL || '/api'
+function hasUnsyncedTrades() {
+  return localGetTrades().some((trade) => isLocalId(trade.id))
+}
 
 export async function getTrades() {
-  if (await isBackendAvailable()) {
-    const res = await fetch(`${API_URL}/trades`)
-    if (!res.ok) throw new Error('Error al obtener los trades')
-    return res.json()
+  try {
+    const rows = await getJson('/trades')
+    cacheTrades(rows)
+    return localGetTrades()
+  } catch (error) {
+    if (error instanceof ApiUnavailableError) return localGetTrades()
+    throw error
   }
-  return local.getAll()
 }
 
 export async function getTradesSummary() {
-  if (await isBackendAvailable()) {
-    const res = await fetch(`${API_URL}/trades/summary`)
-    if (!res.ok) throw new Error('Error al obtener el resumen de resultados')
-    return res.json()
+  try {
+    const summary = await getJson('/trades/summary')
+    if (hasUnsyncedTrades()) return localGetTradesSummary()
+    return summary
+  } catch (error) {
+    if (error instanceof ApiUnavailableError) return localGetTradesSummary()
+    throw error
   }
-  return local.getSummary()
 }
 
-// data: { date, assetType, ticker, operation, quantity, price, fee?, notes? }
 export async function createTrade(data) {
-  if (await isBackendAvailable()) {
-    const res = await fetch(`${API_URL}/trades`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data),
-    })
-    if (!res.ok) {
-      const body = await res.json().catch(() => ({}))
-      throw new Error(body.error || 'Error al crear el trade')
-    }
-    return res.json()
+  try {
+    const created = await postJson('/trades', data)
+    cacheTrades([created, ...localGetTrades().filter((row) => String(row.id) !== String(created.id))])
+    return created
+  } catch (error) {
+    if (error instanceof ApiUnavailableError) return localCreateTrade(data)
+    throw error
   }
-  return local.create(data)
 }
 
 export async function updateTrade(id, data) {
-  if (await isBackendAvailable()) {
-    const res = await fetch(`${API_URL}/trades/${id}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data),
-    })
-    if (!res.ok) {
-      const body = await res.json().catch(() => ({}))
-      throw new Error(body.error || 'Error al actualizar el trade')
-    }
-    return res.json()
+  if (isLocalId(id)) return localUpdateTrade(id, data)
+  try {
+    const updated = await putJson(`/trades/${encodeURIComponent(id)}`, data)
+    cacheTrades([updated, ...localGetTrades().filter((row) => String(row.id) !== String(updated.id))])
+    return updated
+  } catch (error) {
+    if (error instanceof ApiUnavailableError) return localUpdateTrade(id, data)
+    throw error
   }
-  return local.update(id, data)
 }
 
 export async function deleteTrade(id) {
-  if (await isBackendAvailable()) {
-    const res = await fetch(`${API_URL}/trades/${id}`, { method: 'DELETE' })
-    if (!res.ok && res.status !== 204) throw new Error('Error al eliminar el trade')
-    return
+  if (isLocalId(id)) return localDeleteTrade(id)
+  try {
+    await deleteJson(`/trades/${encodeURIComponent(id)}`)
+    try {
+      localDeleteTrade(id)
+    } catch {
+      // No había copia local: la eliminación remota ya fue exitosa.
+    }
+  } catch (error) {
+    if (error instanceof ApiUnavailableError) return localDeleteTrade(id)
+    throw error
   }
-  return local.remove(id)
 }

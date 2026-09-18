@@ -11,10 +11,14 @@ function create(req, res) {
   const { ticker, type = 'IN', price = null } = req.body;
 
   if (!ticker) {
-    return res.status(400).json({ error: 'ticker es requerido' });
+    return res.status(400).json({ error: 'ticker es requerido', code: 'VALIDATION_ERROR' });
   }
   if (!['IN', 'TARGET', 'STOP_LOSS'].includes(type)) {
-    return res.status(400).json({ error: "type debe ser 'IN', 'TARGET' o 'STOP_LOSS'" });
+    return res.status(400).json({ error: "type debe ser 'IN', 'TARGET' o 'STOP_LOSS'", code: 'VALIDATION_ERROR' });
+  }
+
+  if (price !== null && price !== '' && !(Number(price) > 0)) {
+    return res.status(400).json({ error: 'price debe ser mayor a 0', code: 'VALIDATION_ERROR' });
   }
 
   const stmt = db.prepare('INSERT INTO alerts (ticker, type, price) VALUES (?, ?, ?)');
@@ -29,12 +33,20 @@ function update(req, res) {
   const existing = db.prepare('SELECT * FROM alerts WHERE id = ?').get(req.params.id);
   if (!existing) return res.status(404).json({ error: 'Alerta no encontrada' });
 
-  const {
-    ticker = existing.ticker,
-    type = existing.type,
-    price = existing.price,
-    triggered = existing.triggered,
-  } = req.body;
+  const ticker = req.body.ticker !== undefined
+    ? String(req.body.ticker).trim().toUpperCase()
+    : existing.ticker;
+  const type = req.body.type !== undefined ? req.body.type : existing.type;
+  const price = req.body.price !== undefined ? req.body.price : existing.price;
+  const triggered = req.body.triggered !== undefined ? req.body.triggered : existing.triggered;
+
+  if (!ticker) return res.status(400).json({ error: 'ticker es requerido', code: 'VALIDATION_ERROR' });
+  if (!['IN', 'TARGET', 'STOP_LOSS'].includes(type)) {
+    return res.status(400).json({ error: "type debe ser 'IN', 'TARGET' o 'STOP_LOSS'", code: 'VALIDATION_ERROR' });
+  }
+  if (price !== null && price !== '' && !(Number(price) > 0)) {
+    return res.status(400).json({ error: 'price debe ser mayor a 0', code: 'VALIDATION_ERROR' });
+  }
 
   db.prepare(`
     UPDATE alerts
