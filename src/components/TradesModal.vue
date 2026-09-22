@@ -245,7 +245,7 @@ watch(searchQuery, () => {
 // ARS y en USD — como muestran los brokers en su panel de "cartera".
 const openPositions = computed(() =>
   summary.value.bySymbol
-    .filter((s) => s.quantity > 0)
+    .filter((s) => Number(s.quantity) > 0.000001)
     .map((s) => {
       const isCedear = s.assetType === 'CEDEAR'
       const livePrice = getLivePrice(s.ticker, s.assetType)

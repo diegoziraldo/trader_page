@@ -170,9 +170,22 @@ function computeSummary(trades) {
       const plUSD = t.quantity * (priceUSD - s.avgCostUSD) - feeUSD;
       s.realizedPL += pl;
       s.realizedPLUSD += plUSD;
-      s.quantity = Math.max(0, s.quantity - t.quantity);
-      s.invested = s.avgCost * s.quantity;
-      s.investedUSD = s.avgCostUSD * s.quantity;
+      const cantidadRestante = s.quantity - t.quantity;
+
+      if (cantidadRestante <= 0.000001) {
+        // La posición quedó completamente cerrada.
+        // Se conserva realizedPL porque pertenece al histórico.
+        s.quantity = 0;
+        s.avgCost = 0;
+        s.invested = 0;
+        s.avgCostUSD = 0;
+        s.investedUSD = 0;
+      } else {
+        // Queda una posición abierta: solo se conserva el costo de las unidades restantes.
+        s.quantity = cantidadRestante;
+        s.invested = s.avgCost * s.quantity;
+        s.investedUSD = s.avgCostUSD * s.quantity;
+      }
     }
   }
 
