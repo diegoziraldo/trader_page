@@ -367,15 +367,40 @@ function concentrationLabel(idx) {
   return 'Muy concentrada'
 }
 
-function breakdownBy(keyFn) {
+// Paleta fija por sector, para que una empresa y su sector se vean siempre
+// con el mismo color entre los tres desgloses (tipo, sector y empresa).
+const SECTOR_COLORS = {
+  'Tecnología': '#3b82f6',
+  'Financiero': '#22c55e',
+  'Energía': '#f97316',
+  'Consumo': '#eab308',
+  'Salud': '#ec4899',
+  'Industrial': '#94a3b8',
+  'Materiales': '#a16207',
+  'Utilities': '#06b6d4',
+  'Comunicación': '#8b5cf6',
+  'Real Estate': '#14b8a6',
+  'General': '#6b7280',
+}
+function sectorColor(sector) {
+  return SECTOR_COLORS[sector] || SECTOR_COLORS.General
+}
+
+function breakdownBy(keyFn, sectorFn = null) {
   const map = {}
   for (const p of positionsWithWeight.value) {
     const key = keyFn(p) || 'Sin clasificar'
-    map[key] = (map[key] || 0) + displayValue(p)
+    if (!map[key]) map[key] = { value: 0, sector: sectorFn ? sectorFn(p) : null }
+    map[key].value += displayValue(p)
   }
   const total = totalValueARS.value
   return Object.entries(map)
-    .map(([label, value]) => ({ label, value, pct: total > 0 ? (value / total) * 100 : 0 }))
+    .map(([label, { value, sector }]) => ({
+      label,
+      value,
+      sector,
+      pct: total > 0 ? (value / total) * 100 : 0,
+    }))
     .sort((a, b) => b.pct - a.pct)
 }
 
@@ -383,7 +408,7 @@ const breakdownByType = computed(() =>
   breakdownBy((p) => (p.assetType === 'CEDEAR' ? 'CEDEARs' : 'Acciones argentinas'))
 )
 const breakdownBySector = computed(() => breakdownBy((p) => p.sector))
-const breakdownByCompany = computed(() => breakdownBy((p) => p.ticker))
+const breakdownByCompany = computed(() => breakdownBy((p) => p.ticker, (p) => p.sector))
 
 // =========================================================
 // BETA PONDERADA DE LA CARTERA Y PERFIL DE INVERSOR
@@ -583,6 +608,12 @@ function onOverlayClick(e) {
 
                 <!-- Diversificación -->
                 <div v-if="positions.length" class="diversification-section">
+                  <div class="sector-legend">
+                    <span v-for="b in breakdownBySector" :key="b.label" class="legend-item">
+                      <span class="legend-dot" :style="{ backgroundColor: sectorColor(b.label) }"></span>
+                      {{ b.label }}
+                    </span>
+                  </div>
                   <div class="diversification-col">
                     <div class="section-title">Por tipo de activo</div>
                     <div v-for="b in breakdownByType" :key="b.label" class="bar-row">
@@ -598,7 +629,7 @@ function onOverlayClick(e) {
                     <div v-for="b in breakdownBySector" :key="b.label" class="bar-row">
                       <span class="bar-label">{{ b.label }}</span>
                       <div class="bar-track">
-                        <div class="bar-fill bar-fill-alt" :style="{ width: b.pct + '%' }"></div>
+                        <div class="bar-fill" :style="{ width: b.pct + '%', backgroundColor: sectorColor(b.label) }"></div>
                       </div>
                       <span class="bar-pct">{{ formatMoney(b.pct) }}%</span>
                     </div>
@@ -606,9 +637,9 @@ function onOverlayClick(e) {
                   <div class="diversification-col">
                     <div class="section-title">Por empresa</div>
                     <div v-for="b in breakdownByCompany" :key="b.label" class="bar-row">
-                      <span class="bar-label">{{ b.label }}</span>
+                      <span class="bar-label" :title="b.sector">{{ b.label }}</span>
                       <div class="bar-track">
-                        <div class="bar-fill bar-fill-company" :style="{ width: b.pct + '%' }"></div>
+                        <div class="bar-fill" :style="{ width: b.pct + '%', backgroundColor: sectorColor(b.sector) }"></div>
                       </div>
                       <span class="bar-pct">{{ formatMoney(b.pct) }}%</span>
                     </div>
@@ -1044,6 +1075,31 @@ function onOverlayClick(e) {
   gap: 10px;
 }
 
+.sector-legend {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 4px;
+}
+
+.legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.legend-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
 .section-title {
   font-size: 15px;
   font-weight: 700;
@@ -1076,14 +1132,6 @@ function onOverlayClick(e) {
   height: 100%;
   background: var(--blue, #2563eb);
   border-radius: 999px;
-}
-
-.bar-fill-alt {
-  background: #22c55e;
-}
-
-.bar-fill-company {
-  background: #c084fc;
 }
 
 .bar-pct {
