@@ -12,6 +12,7 @@ import {
 } from '../services/portfoliosService'
 import { fetchQuote, getTheoreticalCedear } from '../services/stockService'
 import { useDolar } from '../composables/useDolar'
+import { PORTFOLIO_ASSET_BY_TICKER, getCatalogGroupedBySector } from '../data/argentinePortfolioAssets'
 
 const emit = defineEmits(['close'])
 
@@ -142,6 +143,24 @@ const form = reactive(emptyForm())
 const formError = ref('')
 const editingPositionId = ref(null)
 
+// --- Catálogo de papeles (CEDEARs + acciones argentinas) para el select ---
+const catalogGroups = getCatalogGroupedBySector()
+const pickedTicker = ref('') // valor del <select>: ticker del catálogo, o '__OTHER__'
+const isManualTicker = computed(() => pickedTicker.value === '__OTHER__')
+
+function onPickTicker() {
+  if (pickedTicker.value === '__OTHER__' || pickedTicker.value === '') {
+    form.ticker = ''
+    return
+  }
+  const asset = PORTFOLIO_ASSET_BY_TICKER[pickedTicker.value]
+  if (!asset) return
+  form.ticker = asset.ticker
+  form.assetType = asset.assetType
+  form.sector = asset.sector
+  form.underlyingTicker = asset.assetType === 'CEDEAR' ? asset.ticker : ''
+}
+
 const SECTORS = [
   'General', 'Tecnología', 'Financiero', 'Energía', 'Consumo', 'Salud',
   'Industrial', 'Materiales', 'Utilities', 'Comunicación', 'Real Estate',
@@ -158,12 +177,14 @@ function startEditPosition(pos) {
   form.avgPrice = pos.avgPrice
   form.targetWeight = pos.targetWeight ?? ''
   form.manualPrice = pos.manualPrice ?? ''
+  pickedTicker.value = PORTFOLIO_ASSET_BY_TICKER[pos.ticker] ? pos.ticker : '__OTHER__'
   formError.value = ''
 }
 
 function cancelEditPosition() {
   editingPositionId.value = null
   Object.assign(form, emptyForm())
+  pickedTicker.value = ''
   formError.value = ''
 }
 
@@ -299,6 +320,7 @@ const positionsComputed = computed(() =>
       hasLivePrice: currentPriceARS != null,
       underlyingLoading: underlyingLive?.loading ?? false,
       underlyingError: underlyingLive?.error ?? null,
+      beta: PORTFOLIO_ASSET_BY_TICKER[p.ticker]?.beta ?? null,
     }
   })
 )
@@ -361,6 +383,51 @@ const breakdownByType = computed(() =>
   breakdownBy((p) => (p.assetType === 'CEDEAR' ? 'CEDEARs' : 'Acciones argentinas'))
 )
 const breakdownBySector = computed(() => breakdownBy((p) => p.sector))
+const breakdownByCompany = computed(() => breakdownBy((p) => p.ticker))
+
+// =========================================================
+// BETA PONDERADA DE LA CARTERA Y PERFIL DE INVERSOR
+// =========================================================
+// Beta ponderado = Σ(peso_i × beta_i) de las posiciones con beta conocido
+// (papeles del catálogo). Se renormaliza sobre el peso de esas posiciones,
+// para que los papeles sin beta cargado (tickers manuales, fuera del
+// catálogo) no distorsionen el promedio en lugar de simplemente quedar
+// afuera del cálculo.
+const positionsWithKnownBeta = computed(() => positionsWithWeight.value.filter((p) => p.beta != null))
+const knownBetaWeightSum = computed(() => positionsWithKnownBeta.value.reduce((acc, p) => acc + p.weight, 0))
+const betaCoveragePct = computed(() => knownBetaWeightSum.value) // % de la cartera con beta conocido
+
+const portfolioBeta = computed(() => {
+  if (!positionsWithKnownBeta.value.length || knownBetaWeightSum.value <= 0) return null
+  const weighted = positionsWithKnownBeta.value.reduce((acc, p) => acc + p.beta * p.weight, 0)
+  return weighted / knownBetaWeightSum.value
+})
+
+// Clasificación orientativa: beta < 1 implica menor volatilidad que el
+// mercado de referencia, beta > 1 implica mayor volatilidad. Son umbrales
+// de uso común en educación financiera, no una regla universal.
+function investorProfileFromBeta(beta) {
+  if (beta == null) return null
+  if (beta < 0.85) return { label: 'Conservador', detail: 'la cartera se mueve menos que el mercado de referencia' }
+  if (beta <= 1.15) return { label: 'Moderado', detail: 'la cartera se mueve en línea con el mercado de referencia' }
+  return { label: 'Agresivo', detail: 'la cartera se mueve más que el mercado de referencia' }
+}
+const investorProfile = computed(() => investorProfileFromBeta(portfolioBeta.value))
+
+// Diagnóstico de diversificación: combina el índice de concentración (HHI)
+// con la cantidad de sectores distintos representados.
+const diversificationVerdict = computed(() => {
+  const hhi = concentrationIndex.value
+  const sectorCount = breakdownBySector.value.length
+  if (!positionsWithWeight.value.length) return null
+  if (hhi <= 20 && sectorCount >= 4) {
+    return { label: 'Bien diversificada', detail: `repartida en ${sectorCount} sectores, sin posiciones dominantes` }
+  }
+  if (hhi <= 40 && sectorCount >= 3) {
+    return { label: 'Moderadamente diversificada', detail: `${sectorCount} sectores, pero con algo de concentración` }
+  }
+  return { label: 'Poco diversificada', detail: sectorCount <= 2 ? `solo ${sectorCount} sector(es) representado(s)` : 'hay posiciones que concentran gran parte del valor' }
+})
 
 onMounted(async () => {
   await loadPortfolios()
@@ -476,6 +543,38 @@ function onOverlayClick(e) {
                     </span>
                     <strong>{{ formatMoney(concentrationIndex) }} <span class="concentration-tag">{{ concentrationLabel(concentrationIndex) }}</span></strong>
                   </div>
+                  <div class="summary-card">
+                    <span class="summary-label" title="Beta ponderado por peso de las posiciones con beta conocido (papeles del catálogo). Beta > 1 = más volátil que el mercado, < 1 = menos volátil.">
+                      Beta ponderada
+                    </span>
+                    <strong>
+                      {{ portfolioBeta != null ? formatMoney(portfolioBeta) : '—' }}
+                      <span v-if="portfolioBeta != null && betaCoveragePct < 99" class="concentration-tag">
+                        (cubre {{ formatMoney(betaCoveragePct) }}% de la cartera)
+                      </span>
+                    </strong>
+                  </div>
+                  <div class="summary-card">
+                    <span class="summary-label">Perfil de la cartera</span>
+                    <strong v-if="investorProfile">
+                      <span class="badge" :class="'badge-profile-' + investorProfile.label.toLowerCase()">{{ investorProfile.label }}</span>
+                    </strong>
+                    <strong v-else>—</strong>
+                  </div>
+                  <div class="summary-card">
+                    <span class="summary-label">Diversificación</span>
+                    <strong v-if="diversificationVerdict">{{ diversificationVerdict.label }}</strong>
+                    <strong v-else>—</strong>
+                  </div>
+                </div>
+                <div v-if="investorProfile || diversificationVerdict" class="pf-hint">
+                  <template v-if="investorProfile">
+                    📈 Perfil <strong>{{ investorProfile.label }}</strong>: {{ investorProfile.detail }} (beta ponderada {{ formatMoney(portfolioBeta) }}).
+                  </template>
+                  <template v-if="diversificationVerdict">
+                    <br>🧩 Diversificación: <strong>{{ diversificationVerdict.label }}</strong>, {{ diversificationVerdict.detail }}.
+                  </template>
+                  <br><span class="stacked-line-dim">El beta de cada papel es un valor de referencia aproximado (varía según la fuente y el período de cálculo); usalo como orientación de riesgo, no como dato exacto en tiempo real.</span>
                 </div>
                 <div v-if="!allPricesKnown && positions.length" class="pf-hint">
                   ⚠️ Algunas posiciones no tienen precio en vivo ni precio manual cargado: se están valuando por su
@@ -504,22 +603,44 @@ function onOverlayClick(e) {
                       <span class="bar-pct">{{ formatMoney(b.pct) }}%</span>
                     </div>
                   </div>
+                  <div class="diversification-col">
+                    <div class="section-title">Por empresa</div>
+                    <div v-for="b in breakdownByCompany" :key="b.label" class="bar-row">
+                      <span class="bar-label">{{ b.label }}</span>
+                      <div class="bar-track">
+                        <div class="bar-fill bar-fill-company" :style="{ width: b.pct + '%' }"></div>
+                      </div>
+                      <span class="bar-pct">{{ formatMoney(b.pct) }}%</span>
+                    </div>
+                  </div>
                 </div>
 
                 <!-- Formulario de posición -->
                 <form class="pf-form" @submit.prevent="submitPosition">
                   <div class="section-title">{{ editingPositionId ? 'Editar posición' : 'Agregar posición' }}</div>
                   <div class="form-grid">
+                    <div class="form-field form-field-wide">
+                      <label>Papel (catálogo de CEDEARs y acciones argentinas)</label>
+                      <select v-model="pickedTicker" @change="onPickTicker">
+                        <option value="">— Elegí un papel —</option>
+                        <optgroup v-for="grp in catalogGroups" :key="grp.sector" :label="grp.sector">
+                          <option v-for="item in grp.items" :key="item.ticker" :value="item.ticker">
+                            {{ item.ticker }} — {{ item.name }} ({{ item.assetType === 'CEDEAR' ? 'CEDEAR' : 'Acción AR' }}) · β {{ item.beta }}
+                          </option>
+                        </optgroup>
+                        <option value="__OTHER__">Otro papel (no está en la lista)</option>
+                      </select>
+                    </div>
+                    <div v-if="isManualTicker" class="form-field">
+                      <label>Ticker manual</label>
+                      <input type="text" v-model="form.ticker" placeholder="Ej: XYZ" style="text-transform:uppercase" required>
+                    </div>
                     <div class="form-field">
                       <label>Tipo de activo</label>
-                      <select v-model="form.assetType">
+                      <select v-model="form.assetType" :disabled="!isManualTicker">
                         <option value="CEDEAR">CEDEAR</option>
                         <option value="ACCION_AR">Acción argentina</option>
                       </select>
-                    </div>
-                    <div class="form-field">
-                      <label>Ticker</label>
-                      <input type="text" v-model="form.ticker" placeholder="Ej: AAPL, GGAL" style="text-transform:uppercase" required>
                     </div>
                     <template v-if="form.assetType === 'CEDEAR'">
                       <div class="form-field">
@@ -537,7 +658,7 @@ function onOverlayClick(e) {
                     </template>
                     <div class="form-field">
                       <label>Sector</label>
-                      <select v-model="form.sector">
+                      <select v-model="form.sector" :disabled="!isManualTicker">
                         <option v-for="s in SECTORS" :key="s" :value="s">{{ s }}</option>
                       </select>
                     </div>
@@ -579,6 +700,7 @@ function onOverlayClick(e) {
                     <thead>
                       <tr>
                         <th>Ticker</th>
+                        <th class="num">Beta</th>
                         <th class="num">Cantidad</th>
                         <th class="num">Precio</th>
                         <th class="num">Valor / Peso</th>
@@ -603,6 +725,7 @@ function onOverlayClick(e) {
                             Ratio: {{ p.ratio ?? '—' }} · Subyacente: {{ p.underlyingTicker || '—' }}
                           </div>
                         </td>
+                        <td class="num">{{ p.beta ?? '—' }}</td>
                         <td class="num">{{ p.quantity }}</td>
                         <td class="num">
                           <div class="stacked-cell">
@@ -959,6 +1082,10 @@ function onOverlayClick(e) {
   background: #22c55e;
 }
 
+.bar-fill-company {
+  background: #c084fc;
+}
+
 .bar-pct {
   text-align: right;
   font-family: var(--font-num, inherit);
@@ -1155,6 +1282,21 @@ function onOverlayClick(e) {
 .badge-ar {
   background: rgba(168, 85, 247, 0.15);
   color: #c084fc;
+}
+
+.badge-profile-conservador {
+  background: rgba(59, 130, 246, 0.15);
+  color: #60a5fa;
+}
+
+.badge-profile-moderado {
+  background: rgba(234, 179, 8, 0.15);
+  color: #eab308;
+}
+
+.badge-profile-agresivo {
+  background: rgba(239, 68, 68, 0.15);
+  color: #ef4444;
 }
 
 .pct-tag {
