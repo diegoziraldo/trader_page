@@ -152,4 +152,55 @@ db.exec(`
   );
 `);
 
+// Cauciones bursátiles: colocás pesos (o dólares) como caucionante a una
+// TNA pactada por N días, con la comisión que cobra el broker sobre el
+// interés bruto (o fija), para saber la ganancia neta real que te queda.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS cauciones (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    start_date TEXT NOT NULL,
+    term_days INTEGER NOT NULL,
+    amount REAL NOT NULL,
+    currency TEXT NOT NULL CHECK (currency IN ('ARS', 'USD')) DEFAULT 'ARS',
+    tna REAL NOT NULL,
+    broker TEXT NOT NULL DEFAULT '',
+    fee_type TEXT NOT NULL CHECK (fee_type IN ('PERCENT', 'FIXED')) DEFAULT 'PERCENT',
+    fee_value REAL NOT NULL DEFAULT 0,
+    status TEXT NOT NULL CHECK (status IN ('ACTIVA', 'FINALIZADA')) DEFAULT 'ACTIVA',
+    notes TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+`);
+
+// Armado de carteras: agrupa posiciones de CEDEARs/acciones argentinas,
+// con ratio de conversión opcional para valuar en USD contra el precio
+// real de la acción subyacente (mismo criterio que la bitácora de trades).
+db.exec(`
+  CREATE TABLE IF NOT EXISTS portfolios (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    notes TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  CREATE TABLE IF NOT EXISTS portfolio_positions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    portfolio_id INTEGER NOT NULL REFERENCES portfolios(id) ON DELETE CASCADE,
+    asset_type TEXT NOT NULL CHECK (asset_type IN ('CEDEAR', 'ACCION_AR')) DEFAULT 'CEDEAR',
+    ticker TEXT NOT NULL,
+    underlying_ticker TEXT NOT NULL DEFAULT '',
+    ratio REAL,
+    sector TEXT NOT NULL DEFAULT 'General',
+    quantity REAL NOT NULL,
+    avg_price REAL NOT NULL,
+    target_weight REAL,
+    manual_price REAL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+`);
+db.pragma('foreign_keys = ON');
+
 module.exports = db;

@@ -112,3 +112,66 @@ CREATE TABLE IF NOT EXISTS trade_journal (
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+-- Cauciones bursátiles: colocás pesos (o dólares) como caucionante a una
+-- TNA pactada por N días. El broker cobra una comisión (fija o % sobre el
+-- interés bruto) que hay que restar para saber la ganancia neta real.
+-- Fórmulas (interés simple, base 365 días, igual que usan los brokers
+-- argentinos para cauciones colocadoras):
+--   interés bruto   = monto × (TNA / 100) × (días / 365)
+--   comisión broker = % → interés bruto × (feeValue / 100)  |  fija → feeValue
+--   ganancia neta   = interés bruto - comisión broker  (= lo que "te queda")
+--   TNA neta        = (ganancia neta / monto) × (365 / días) × 100
+CREATE TABLE IF NOT EXISTS cauciones (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  start_date TEXT NOT NULL,
+  term_days INTEGER NOT NULL,
+  amount REAL NOT NULL,
+  currency TEXT NOT NULL CHECK (currency IN ('ARS', 'USD')) DEFAULT 'ARS',
+  tna REAL NOT NULL,
+  broker TEXT NOT NULL DEFAULT '',
+  fee_type TEXT NOT NULL CHECK (fee_type IN ('PERCENT', 'FIXED')) DEFAULT 'PERCENT',
+  fee_value REAL NOT NULL DEFAULT 0,
+  status TEXT NOT NULL CHECK (status IN ('ACTIVA', 'FINALIZADA')) DEFAULT 'ACTIVA',
+  notes TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Armado de carteras: agrupa posiciones de CEDEARs/acciones argentinas para
+-- analizar composición, peso y diversificación de forma profesional. Cada
+-- posición puede llevar el ratio de conversión (CEDEARs por acción) para
+-- valuar correctamente en USD contra el precio real de la acción subyacente,
+-- igual criterio que usa la bitácora de trades.
+CREATE TABLE IF NOT EXISTS portfolios (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  notes TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS portfolio_positions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  portfolio_id INTEGER NOT NULL REFERENCES portfolios(id) ON DELETE CASCADE,
+  asset_type TEXT NOT NULL CHECK (asset_type IN ('CEDEAR', 'ACCION_AR')) DEFAULT 'CEDEAR',
+  ticker TEXT NOT NULL,
+  -- Solo aplica a CEDEARs: ticker de la acción subyacente en USA (para
+  -- traer el precio en vivo por Finnhub) y ratio de conversión (cuántos
+  -- CEDEARs equivalen a 1 acción). Con ambos cargados se puede valuar la
+  -- posición en USD "de verdad" (precio real ÷ ratio), no aproximado con
+  -- el CCL general.
+  underlying_ticker TEXT NOT NULL DEFAULT '',
+  ratio REAL,
+  sector TEXT NOT NULL DEFAULT 'General',
+  quantity REAL NOT NULL,
+  avg_price REAL NOT NULL,
+  -- Peso objetivo (%) que el usuario quiere que tenga esta posición en la
+  -- cartera, para comparar contra el peso real y ver si hay que rebalancear.
+  target_weight REAL,
+  -- Precio actual manual: para ACCION_AR (o cualquier ticker sin cotización
+  -- en vivo disponible), el usuario lo carga/actualiza a mano.
+  manual_price REAL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);

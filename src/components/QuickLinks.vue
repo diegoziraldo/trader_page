@@ -16,6 +16,22 @@
       <span>📊 Planilla Pro</span>
     </button>
 
+    <button
+      class="quick-link quick-link-cauciones"
+      :style="{ backgroundColor: '#422006', color: '#fbbf24' }"
+      @click="$emit('open-cauciones')"
+    >
+      <span>💰 Cauciones</span>
+    </button>
+
+    <button
+      class="quick-link quick-link-carteras"
+      :style="{ backgroundColor: '#022c22', color: '#34d399' }"
+      @click="$emit('open-carteras')"
+    >
+      <span>🧩 Carteras</span>
+    </button>
+
     <a
       v-for="link in links"
       :key="link.name"
@@ -34,7 +50,7 @@
 </template>
 
 <script setup>
-defineEmits(['open-trades', 'open-journal'])
+defineEmits(['open-trades', 'open-journal', 'open-cauciones', 'open-carteras'])
 
 const links = [
   {
@@ -146,6 +162,16 @@ button.quick-link {
 .quick-link-journal {
   font-weight: 700;
   border-color: #3730a3 !important;
+}
+
+.quick-link-cauciones {
+  font-weight: 700;
+  border-color: #92400e !important;
+}
+
+.quick-link-carteras {
+  font-weight: 700;
+  border-color: #065f46 !important;
 }
 
 

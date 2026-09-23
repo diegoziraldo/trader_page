@@ -4,6 +4,8 @@ import * as watchlist from '../_lib/watchlist.js';
 import * as checklist from '../_lib/checklist.js';
 import * as trades from '../_lib/trades.js';
 import * as journal from '../_lib/journal.js';
+import * as cauciones from '../_lib/cauciones.js';
+import * as portfolios from '../_lib/portfolios.js';
 
 const app = new Hono().basePath('/api');
 
@@ -147,6 +149,66 @@ app.delete(
   '/journal/:id',
   h(async (c) => {
     await journal.remove(c.env.DB, c.req.param('id'));
+    return c.body(null, 204);
+  })
+);
+
+// ---------- Cauciones ----------
+app.get('/cauciones/summary', h(async (c) => c.json(await cauciones.getSummary(c.env.DB))));
+app.get('/cauciones', h(async (c) => c.json(await cauciones.getAll(c.env.DB))));
+app.post(
+  '/cauciones',
+  h(async (c) => c.json(await cauciones.create(c.env.DB, await c.req.json()), 201))
+);
+app.put(
+  '/cauciones/:id',
+  h(async (c) => c.json(await cauciones.update(c.env.DB, c.req.param('id'), await c.req.json())))
+);
+app.delete(
+  '/cauciones/:id',
+  h(async (c) => {
+    await cauciones.remove(c.env.DB, c.req.param('id'));
+    return c.body(null, 204);
+  })
+);
+
+// ---------- Armado de carteras ----------
+app.get('/portfolios', h(async (c) => c.json(await portfolios.getAllPortfolios(c.env.DB))));
+app.post(
+  '/portfolios',
+  h(async (c) => c.json(await portfolios.createPortfolio(c.env.DB, await c.req.json()), 201))
+);
+app.put(
+  '/portfolios/:id',
+  h(async (c) => c.json(await portfolios.updatePortfolio(c.env.DB, c.req.param('id'), await c.req.json())))
+);
+app.delete(
+  '/portfolios/:id',
+  h(async (c) => {
+    await portfolios.removePortfolio(c.env.DB, c.req.param('id'));
+    return c.body(null, 204);
+  })
+);
+app.get(
+  '/portfolios/:id/positions',
+  h(async (c) => c.json(await portfolios.getPositions(c.env.DB, c.req.param('id'))))
+);
+app.post(
+  '/portfolios/:id/positions',
+  h(async (c) =>
+    c.json(await portfolios.createPosition(c.env.DB, c.req.param('id'), await c.req.json()), 201)
+  )
+);
+app.put(
+  '/portfolios/positions/:positionId',
+  h(async (c) =>
+    c.json(await portfolios.updatePosition(c.env.DB, c.req.param('positionId'), await c.req.json()))
+  )
+);
+app.delete(
+  '/portfolios/positions/:positionId',
+  h(async (c) => {
+    await portfolios.removePosition(c.env.DB, c.req.param('positionId'));
     return c.body(null, 204);
   })
 );

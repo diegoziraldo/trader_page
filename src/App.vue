@@ -8,6 +8,9 @@ import Checklist from './components/Checklist.vue'
 import QuickLinks from './components/QuickLinks.vue'
 import CclCalculator from './components/CclCalculator.vue'
 import TradesModal from './components/TradesModal.vue'
+import JournalModal from './components/JournalModal.vue'
+import CaucionesModal from './components/CaucionesModal.vue'
+import PortfolioBuilder from './components/PortfolioBuilder.vue'
 import { useDolar } from './composables/useDolar'
 import { useUsStocks } from './composables/useStocks'
 import { isBackendAvailable, resetBackendCheck } from './services/apiAvailability.js'
@@ -22,6 +25,14 @@ const { stocks: usStocks, addTicker: addUsTicker, removeTicker: removeUsTicker }
 
 // --- Bitácora de trades (modal) ---
 const showTrades = ref(false)
+
+// --- Planilla profesional de trading (modal) ---
+// (el botón ya existía en QuickLinks pero no estaba conectado a nada)
+const showJournal = ref(false)
+
+// --- Cauciones y armado de carteras (modales) ---
+const showCauciones = ref(false)
+const showCarteras = ref(false)
 
 // --- Modo de almacenamiento: backend real vs. localStorage del navegador ---
 // null mientras se detecta, true/false una vez resuelto. Ver
@@ -52,7 +63,12 @@ onMounted(checkStorageMode)
     <FinanceTicker :dolares="dolares" :riesgo-pais="riesgoPais" :loading="dolarLoading" compact />
   </div>
   <div>
-    <QuickLinks @open-trades="showTrades = true" />
+    <QuickLinks
+      @open-trades="showTrades = true"
+      @open-journal="showJournal = true"
+      @open-cauciones="showCauciones = true"
+      @open-carteras="showCarteras = true"
+    />
 
   </div>
   <!-- Layout principal: las alarmas van al centro, es lo primero que se ve -->
@@ -75,6 +91,9 @@ onMounted(checkStorageMode)
   </div>
 
   <TradesModal v-if="showTrades" @close="showTrades = false" />
+  <JournalModal v-if="showJournal" @close="showJournal = false" />
+  <CaucionesModal v-if="showCauciones" @close="showCauciones = false" />
+  <PortfolioBuilder v-if="showCarteras" @close="showCarteras = false" />
 
   <!-- Indicador de dónde se están guardando los datos ahora mismo. No
        bloquea nada: es solo para que quede claro si estás en modo local
