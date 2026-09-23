@@ -512,6 +512,37 @@ function getAvgHoldingDays(ticker) {
   return { days: Math.round(weightedDays / totalQty), lots: buys.length }
 }
 
+// Días de calendario entre dos fechas "YYYY-MM-DD" (no contra hoy). Se usa
+// para saber cuánto duró abierta una posición ya cerrada (de la compra a la
+// última venta), en vez de contar días hasta hoy como si siguiera abierta.
+function daysBetween(dateAStr, dateBStr) {
+  if (!dateAStr || !dateBStr) return null
+  const a = new Date(dateAStr)
+  const b = new Date(dateBStr)
+  if (Number.isNaN(a.getTime()) || Number.isNaN(b.getTime())) return null
+  const ua = Date.UTC(a.getUTCFullYear(), a.getUTCMonth(), a.getUTCDate())
+  const ub = Date.UTC(b.getUTCFullYear(), b.getUTCMonth(), b.getUTCDate())
+  return Math.max(0, Math.round((ub - ua) / 86_400_000))
+}
+
+// Precio promedio de venta y fecha de la última venta de un ticker, para
+// mostrar "hasta dónde llegó" una posición ya cerrada en vez de compararla
+// contra el precio de hoy (que ya no tiene nada que ver con esa plata).
+function getTickerSaleInfo(ticker) {
+  const sales = trades.value.filter((t) => t.ticker === ticker && t.operation === 'VENTA' && t.quantity > 0)
+  if (!sales.length) return null
+  let totalQty = 0
+  let totalValue = 0
+  let lastDate = null
+  for (const s of sales) {
+    totalQty += s.quantity
+    totalValue += s.quantity * s.price
+    if (!lastDate || s.date > lastDate) lastDate = s.date
+  }
+  if (totalQty <= 0) return null
+  return { avgSellPrice: totalValue / totalQty, lastDate }
+}
+
 // =========================================================
 // CÓMO VIENE ESTE PAPEL, PARA UNA OPERACIÓN PUNTUAL
 // =========================================================
@@ -520,7 +551,30 @@ function getAvgHoldingDays(ticker) {
 // contra el precio actual. Para compras es directamente el rendimiento no
 // realizado de ese lote; para ventas es solo informativo (cómo se movió el
 // papel después de que lo vendiste, no es plata que tengas).
+//
+// Si el ticker ya está totalmente cerrado (se vendió todo lo que había),
+// mostrar el precio de HOY no tiene sentido: esas acciones ya no existen en
+// la cartera y comparar contra la cotización actual solo desvirtúa la
+// ganancia real. En ese caso, en vez de precio en vivo, se muestra el
+// resultado neto ya realizado de ese ticker (que es el número correcto) y
+// el precio promedio al que efectivamente se vendió.
 function getTradeVsCurrent(t) {
+  const tickerSummary = summary.value.bySymbol.find((s) => s.ticker === t.ticker)
+  const isClosed = !!tickerSummary && tickerSummary.quantity <= 0
+
+  if (isClosed) {
+    const saleInfo = getTickerSaleInfo(t.ticker)
+    return {
+      available: true,
+      isClosed: true,
+      isSale: t.operation === 'VENTA',
+      avgSellPrice: saleInfo?.avgSellPrice ?? null,
+      daysHeld: saleInfo ? daysBetween(t.date, saleInfo.lastDate) : null,
+      realizedPL: tickerSummary.realizedPL,
+      realizedPLUSD: tickerSummary.usdIncomplete ? null : tickerSummary.realizedPLUSD,
+    }
+  }
+
   const isCedear = t.assetType === 'CEDEAR'
   const livePrice = getLivePrice(t.ticker, t.assetType)
   const daysElapsed = daysSince(t.date)
@@ -927,10 +981,34 @@ onUnmounted(() => {
                 </div>
               </div>
 
-              <!-- Cómo viene este papel hoy, en relación a esta operación puntual -->
+              <!-- Cómo viene este papel: si el ticker ya está totalmente cerrado (se
+                   vendió todo), no tiene sentido compararlo contra el precio de hoy
+                   -esas acciones ya no las tenés-, así que se muestra el resultado
+                   neto ya realizado y el precio promedio al que se vendió. Solo si
+                   todavía queda posición abierta se compara contra el precio en vivo. -->
               <div class="vs-current-row">
                 <template v-if="t.vsCurrent.available">
-                  <template v-if="t.vsCurrent.isSale">
+                  <template v-if="t.vsCurrent.isClosed">
+                    <span class="vs-current-label">🔒 Posición de {{ t.ticker }} cerrada</span>
+                    <template v-if="t.vsCurrent.avgSellPrice != null">
+                      <span class="vs-current-sep">·</span>
+                      <span class="vs-current-label">vendida en promedio a</span>
+                      <span class="vs-current-price">${{ formatMoney(t.vsCurrent.avgSellPrice) }}</span>
+                      <span v-if="t.vsCurrent.daysHeld != null" class="vs-current-note">(mantenida {{ formatDays(t.vsCurrent.daysHeld) }})</span>
+                    </template>
+                    <span class="vs-current-sep">·</span>
+                    <span class="vs-current-label">resultado neto del ticker</span>
+                    <span :class="t.vsCurrent.realizedPL >= 0 ? 'pl-pos' : 'pl-neg'">
+                      {{ t.vsCurrent.realizedPL >= 0 ? '+' : '' }}${{ formatMoney(t.vsCurrent.realizedPL) }}
+                    </span>
+                    <template v-if="t.vsCurrent.realizedPLUSD != null">
+                      <span class="vs-current-sep">/</span>
+                      <span class="stacked-line-dim" :class="t.vsCurrent.realizedPLUSD >= 0 ? 'pl-pos' : 'pl-neg'">
+                        {{ t.vsCurrent.realizedPLUSD >= 0 ? '+' : '' }}US${{ formatMoney(t.vsCurrent.realizedPLUSD) }}
+                      </span>
+                    </template>
+                  </template>
+                  <template v-else-if="t.vsCurrent.isSale">
                     <span class="vs-current-days" title="Días desde la fecha de esta venta hasta hoy">Hace {{ formatDays(t.vsCurrent.daysElapsed) }}</span>
                     <span class="vs-current-sep">·</span>
                     <span class="vs-current-label">desde que la vendiste, cotiza</span>
@@ -938,7 +1016,7 @@ onUnmounted(() => {
                     <span class="pct-tag" :class="t.vsCurrent.pctChange >= 0 ? 'pl-pos' : 'pl-neg'">
                       ({{ t.vsCurrent.pctChange >= 0 ? '+' : '' }}{{ formatPct(t.vsCurrent.pctChange) }})
                     </span>
-                    <span class="vs-current-note">— no es tu ganancia/pérdida, ya no la tenés</span>
+                    <span class="vs-current-note">— no es tu ganancia/pérdida, todavía te queda posición abierta en este ticker</span>
                   </template>
                   <template v-else>
                     <span class="vs-current-days" title="Días desde la fecha de esta compra hasta hoy">Hace {{ formatDays(t.vsCurrent.daysElapsed) }}</span>
