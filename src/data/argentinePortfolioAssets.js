@@ -13,6 +13,10 @@
 //    cambia con splits/ajustes y hay que confirmarlo con el broker antes de
 //    operar. Por eso el campo "ratio" se carga a mano en el formulario.
 //
+// Si un ticker que necesitás no está acá, cargalo igual a mano en el
+// formulario (tipo de activo y sector manuales) — simplemente no vas a
+// tener beta automático para esa posición hasta que se agregue al catálogo.
+//
 // sector usa las mismas categorías que ya se muestran en el selector de
 // sector del formulario (PortfolioBuilder.vue).
 
@@ -31,6 +35,15 @@ export const PORTFOLIO_ASSET_CATALOG = [
   { ticker: 'AMD', name: 'Advanced Micro Devices', assetType: 'CEDEAR', sector: 'Tecnología', beta: 1.7 },
   { ticker: 'SHOP', name: 'Shopify Inc.', assetType: 'CEDEAR', sector: 'Tecnología', beta: 2.3 },
   { ticker: 'GLOB', name: 'Globant S.A.', assetType: 'CEDEAR', sector: 'Tecnología', beta: 1.5 },
+  { ticker: 'ASML', name: 'ASML Holding', assetType: 'CEDEAR', sector: 'Tecnología', beta: 1.1 },
+  { ticker: 'TSM', name: 'Taiwan Semiconductor', assetType: 'CEDEAR', sector: 'Tecnología', beta: 1.2 },
+  { ticker: 'SAP', name: 'SAP SE', assetType: 'CEDEAR', sector: 'Tecnología', beta: 0.9 },
+  { ticker: 'SONY', name: 'Sony Group Corp.', assetType: 'CEDEAR', sector: 'Tecnología', beta: 0.8 },
+  { ticker: 'TXN', name: 'Texas Instruments', assetType: 'CEDEAR', sector: 'Tecnología', beta: 1.0 },
+  { ticker: 'MU', name: 'Micron Technology', assetType: 'CEDEAR', sector: 'Tecnología', beta: 1.5 },
+  { ticker: 'LRCX', name: 'Lam Research', assetType: 'CEDEAR', sector: 'Tecnología', beta: 1.4 },
+  { ticker: 'AMAT', name: 'Applied Materials', assetType: 'CEDEAR', sector: 'Tecnología', beta: 1.3 },
+  { ticker: 'NOW', name: 'ServiceNow Inc.', assetType: 'CEDEAR', sector: 'Tecnología', beta: 1.1 },
 
   // ---------------- CEDEARs: Comunicación ----------------
   { ticker: 'GOOGL', name: 'Alphabet Inc.', assetType: 'CEDEAR', sector: 'Comunicación', beta: 1.05 },
@@ -40,6 +53,9 @@ export const PORTFOLIO_ASSET_CATALOG = [
   { ticker: 'T', name: 'AT&T Inc.', assetType: 'CEDEAR', sector: 'Comunicación', beta: 0.6 },
   { ticker: 'VZ', name: 'Verizon Communications', assetType: 'CEDEAR', sector: 'Comunicación', beta: 0.4 },
   { ticker: 'TMUS', name: 'T-Mobile US', assetType: 'CEDEAR', sector: 'Comunicación', beta: 0.7 },
+  { ticker: 'BIDU', name: 'Baidu Inc.', assetType: 'CEDEAR', sector: 'Comunicación', beta: 0.7 },
+  { ticker: 'SNAP', name: 'Snap Inc.', assetType: 'CEDEAR', sector: 'Comunicación', beta: 1.4 },
+  { ticker: 'SPOT', name: 'Spotify Technology', assetType: 'CEDEAR', sector: 'Comunicación', beta: 1.3 },
 
   // ---------------- CEDEARs: Consumo ----------------
   { ticker: 'AMZN', name: 'Amazon.com Inc.', assetType: 'CEDEAR', sector: 'Consumo', beta: 1.3 },
@@ -55,6 +71,12 @@ export const PORTFOLIO_ASSET_CATALOG = [
   { ticker: 'WMT', name: 'Walmart Inc.', assetType: 'CEDEAR', sector: 'Consumo', beta: 0.5 },
   { ticker: 'PG', name: 'Procter & Gamble', assetType: 'CEDEAR', sector: 'Consumo', beta: 0.4 },
   { ticker: 'COST', name: 'Costco Wholesale', assetType: 'CEDEAR', sector: 'Consumo', beta: 0.75 },
+  { ticker: 'TM', name: 'Toyota Motor Corp.', assetType: 'CEDEAR', sector: 'Consumo', beta: 0.6 },
+  { ticker: 'JD', name: 'JD.com Inc.', assetType: 'CEDEAR', sector: 'Consumo', beta: 0.6 },
+  { ticker: 'NIO', name: 'NIO Inc.', assetType: 'CEDEAR', sector: 'Consumo', beta: 2.2 },
+  { ticker: 'PDD', name: 'PDD Holdings (Pinduoduo)', assetType: 'CEDEAR', sector: 'Consumo', beta: 0.7 },
+  { ticker: 'ABNB', name: 'Airbnb Inc.', assetType: 'CEDEAR', sector: 'Consumo', beta: 1.2 },
+  { ticker: 'BKNG', name: 'Booking Holdings', assetType: 'CEDEAR', sector: 'Consumo', beta: 1.2 },
 
   // ---------------- CEDEARs: Financiero ----------------
   { ticker: 'JPM', name: 'JPMorgan Chase', assetType: 'CEDEAR', sector: 'Financiero', beta: 1.1 },
@@ -67,6 +89,8 @@ export const PORTFOLIO_ASSET_CATALOG = [
   { ticker: 'BRK.B', name: 'Berkshire Hathaway', assetType: 'CEDEAR', sector: 'Financiero', beta: 0.85 },
   { ticker: 'PYPL', name: 'PayPal Holdings', assetType: 'CEDEAR', sector: 'Financiero', beta: 1.4 },
   { ticker: 'AXP', name: 'American Express', assetType: 'CEDEAR', sector: 'Financiero', beta: 1.2 },
+  { ticker: 'SPGI', name: 'S&P Global Inc.', assetType: 'CEDEAR', sector: 'Financiero', beta: 1.1 },
+  { ticker: 'SCHW', name: 'Charles Schwab Corp.', assetType: 'CEDEAR', sector: 'Financiero', beta: 1.2 },
 
   // ---------------- CEDEARs: Salud ----------------
   { ticker: 'JNJ', name: 'Johnson & Johnson', assetType: 'CEDEAR', sector: 'Salud', beta: 0.5 },
@@ -76,6 +100,12 @@ export const PORTFOLIO_ASSET_CATALOG = [
   { ticker: 'UNH', name: 'UnitedHealth Group', assetType: 'CEDEAR', sector: 'Salud', beta: 0.6 },
   { ticker: 'LLY', name: 'Eli Lilly and Co.', assetType: 'CEDEAR', sector: 'Salud', beta: 0.4 },
   { ticker: 'BMY', name: 'Bristol-Myers Squibb', assetType: 'CEDEAR', sector: 'Salud', beta: 0.4 },
+  { ticker: 'ABT', name: 'Abbott Laboratories', assetType: 'CEDEAR', sector: 'Salud', beta: 0.7 },
+  { ticker: 'TMO', name: 'Thermo Fisher Scientific', assetType: 'CEDEAR', sector: 'Salud', beta: 0.9 },
+  { ticker: 'DHR', name: 'Danaher Corp.', assetType: 'CEDEAR', sector: 'Salud', beta: 0.9 },
+  { ticker: 'CVS', name: 'CVS Health Corp.', assetType: 'CEDEAR', sector: 'Salud', beta: 0.7 },
+  { ticker: 'MDT', name: 'Medtronic plc', assetType: 'CEDEAR', sector: 'Salud', beta: 0.7 },
+  { ticker: 'ISRG', name: 'Intuitive Surgical', assetType: 'CEDEAR', sector: 'Salud', beta: 1.1 },
 
   // ---------------- CEDEARs: Industrial ----------------
   { ticker: 'BA', name: 'Boeing Co.', assetType: 'CEDEAR', sector: 'Industrial', beta: 1.4 },
@@ -84,6 +114,9 @@ export const PORTFOLIO_ASSET_CATALOG = [
   { ticker: 'HON', name: 'Honeywell Intl.', assetType: 'CEDEAR', sector: 'Industrial', beta: 0.9 },
   { ticker: 'MMM', name: '3M Co.', assetType: 'CEDEAR', sector: 'Industrial', beta: 1.0 },
   { ticker: 'FDX', name: 'FedEx Corp.', assetType: 'CEDEAR', sector: 'Industrial', beta: 1.1 },
+  { ticker: 'LMT', name: 'Lockheed Martin', assetType: 'CEDEAR', sector: 'Industrial', beta: 0.6 },
+  { ticker: 'RTX', name: 'RTX Corp. (Raytheon)', assetType: 'CEDEAR', sector: 'Industrial', beta: 0.9 },
+  { ticker: 'DE', name: 'Deere & Co.', assetType: 'CEDEAR', sector: 'Industrial', beta: 1.0 },
 
   // ---------------- CEDEARs: Energía ----------------
   { ticker: 'XOM', name: 'Exxon Mobil Corp.', assetType: 'CEDEAR', sector: 'Energía', beta: 0.9 },
@@ -93,6 +126,8 @@ export const PORTFOLIO_ASSET_CATALOG = [
   // ---------------- CEDEARs: Materiales ----------------
   { ticker: 'VALE', name: 'Vale S.A.', assetType: 'CEDEAR', sector: 'Materiales', beta: 1.1 },
   { ticker: 'FCX', name: 'Freeport-McMoRan', assetType: 'CEDEAR', sector: 'Materiales', beta: 1.8 },
+  { ticker: 'NEM', name: 'Newmont Corp.', assetType: 'CEDEAR', sector: 'Materiales', beta: 0.4 },
+  { ticker: 'GOLD', name: 'Barrick Gold Corp.', assetType: 'CEDEAR', sector: 'Materiales', beta: 0.4 },
 
   // ---------------- Acciones argentinas: Financiero ----------------
   { ticker: 'GGAL', name: 'Grupo Financiero Galicia', assetType: 'ACCION_AR', sector: 'Financiero', beta: 1.7 },
@@ -138,7 +173,8 @@ export const PORTFOLIO_ASSET_BY_TICKER = Object.fromEntries(
 )
 
 // Catálogo agrupado por sector, ordenado alfabéticamente dentro de cada
-// grupo, listo para pintar como <optgroup> en el <select> del formulario.
+// grupo (queda disponible por si en el futuro se vuelve a usar un selector
+// con catálogo; hoy el campo Ticker del formulario es manual).
 export function getCatalogGroupedBySector() {
   const bySector = {}
   for (const asset of PORTFOLIO_ASSET_CATALOG) {

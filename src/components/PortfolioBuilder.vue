@@ -12,7 +12,7 @@ import {
 } from '../services/portfoliosService'
 import { fetchQuote, getTheoreticalCedear } from '../services/stockService'
 import { useDolar } from '../composables/useDolar'
-import { PORTFOLIO_ASSET_BY_TICKER, getCatalogGroupedBySector } from '../data/argentinePortfolioAssets'
+import { PORTFOLIO_ASSET_BY_TICKER } from '../data/argentinePortfolioAssets'
 
 const emit = defineEmits(['close'])
 
@@ -143,23 +143,11 @@ const form = reactive(emptyForm())
 const formError = ref('')
 const editingPositionId = ref(null)
 
-// --- Catálogo de papeles (CEDEARs + acciones argentinas) para el select ---
-const catalogGroups = getCatalogGroupedBySector()
-const pickedTicker = ref('') // valor del <select>: ticker del catálogo, o '__OTHER__'
-const isManualTicker = computed(() => pickedTicker.value === '__OTHER__')
-
-function onPickTicker() {
-  if (pickedTicker.value === '__OTHER__' || pickedTicker.value === '') {
-    form.ticker = ''
-    return
-  }
-  const asset = PORTFOLIO_ASSET_BY_TICKER[pickedTicker.value]
-  if (!asset) return
-  form.ticker = asset.ticker
-  form.assetType = asset.assetType
-  form.sector = asset.sector
-  form.underlyingTicker = asset.assetType === 'CEDEAR' ? asset.ticker : ''
-}
+// Detección automática de beta: si el ticker que escribiste a mano coincide
+// con uno del catálogo (src/data/argentinePortfolioAssets.js), se muestra
+// como referencia junto al campo. No fuerza nada — el resto de los campos
+// (tipo de activo, sector, subyacente, ratio) siempre se cargan a mano.
+const detectedAsset = computed(() => PORTFOLIO_ASSET_BY_TICKER[form.ticker.trim().toUpperCase()] || null)
 
 const SECTORS = [
   'General', 'Tecnología', 'Financiero', 'Energía', 'Consumo', 'Salud',
@@ -177,14 +165,12 @@ function startEditPosition(pos) {
   form.avgPrice = pos.avgPrice
   form.targetWeight = pos.targetWeight ?? ''
   form.manualPrice = pos.manualPrice ?? ''
-  pickedTicker.value = PORTFOLIO_ASSET_BY_TICKER[pos.ticker] ? pos.ticker : '__OTHER__'
   formError.value = ''
 }
 
 function cancelEditPosition() {
   editingPositionId.value = null
   Object.assign(form, emptyForm())
-  pickedTicker.value = ''
   formError.value = ''
 }
 
@@ -650,25 +636,14 @@ function onOverlayClick(e) {
                 <form class="pf-form" @submit.prevent="submitPosition">
                   <div class="section-title">{{ editingPositionId ? 'Editar posición' : 'Agregar posición' }}</div>
                   <div class="form-grid">
-                    <div class="form-field form-field-wide">
-                      <label>Papel (catálogo de CEDEARs y acciones argentinas)</label>
-                      <select v-model="pickedTicker" @change="onPickTicker">
-                        <option value="">— Elegí un papel —</option>
-                        <optgroup v-for="grp in catalogGroups" :key="grp.sector" :label="grp.sector">
-                          <option v-for="item in grp.items" :key="item.ticker" :value="item.ticker">
-                            {{ item.ticker }} — {{ item.name }} ({{ item.assetType === 'CEDEAR' ? 'CEDEAR' : 'Acción AR' }}) · β {{ item.beta }}
-                          </option>
-                        </optgroup>
-                        <option value="__OTHER__">Otro papel (no está en la lista)</option>
-                      </select>
-                    </div>
-                    <div v-if="isManualTicker" class="form-field">
-                      <label>Ticker manual</label>
-                      <input type="text" v-model="form.ticker" placeholder="Ej: XYZ" style="text-transform:uppercase" required>
+                    <div class="form-field">
+                      <label>Ticker</label>
+                      <input type="text" v-model="form.ticker" placeholder="Ej: AAPL, GGAL" style="text-transform:uppercase" required>
+                      <span v-if="detectedAsset" class="field-hint">β {{ detectedAsset.beta }} de referencia · {{ detectedAsset.sector }}</span>
                     </div>
                     <div class="form-field">
                       <label>Tipo de activo</label>
-                      <select v-model="form.assetType" :disabled="!isManualTicker">
+                      <select v-model="form.assetType">
                         <option value="CEDEAR">CEDEAR</option>
                         <option value="ACCION_AR">Acción argentina</option>
                       </select>
@@ -689,7 +664,7 @@ function onOverlayClick(e) {
                     </template>
                     <div class="form-field">
                       <label>Sector</label>
-                      <select v-model="form.sector" :disabled="!isManualTicker">
+                      <select v-model="form.sector">
                         <option v-for="s in SECTORS" :key="s" :value="s">{{ s }}</option>
                       </select>
                     </div>
@@ -1167,6 +1142,11 @@ function onOverlayClick(e) {
   font-size: 12.5px;
   color: var(--text-dim);
   font-weight: 600;
+}
+
+.field-hint {
+  font-size: 11.5px;
+  color: var(--text-dim);
 }
 
 .form-field input,
