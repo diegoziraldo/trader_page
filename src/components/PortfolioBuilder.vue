@@ -13,7 +13,7 @@ import {
 import { fetchQuote, getTheoreticalCedear } from '../services/stockService'
 import { useDolar } from '../composables/useDolar'
 import { PORTFOLIO_ASSET_BY_TICKER } from '../data/argentinePortfolioAssets'
-import { recordSnapshot, getDailyReturns, getMonthlyReturns } from '../services/local/portfolioHistoryLocal'
+import { recordSnapshot, seedFromInception, getDailyReturns, getMonthlyReturns } from '../services/local/portfolioHistoryLocal'
 import Chart from 'chart.js/auto'
 
 const emit = defineEmits(['close'])
@@ -271,6 +271,12 @@ function formatPct(n) {
   return `${sign}${n.toFixed(2)}%`
 }
 
+function formatDateShort(dateISO) {
+  if (!dateISO) return '—'
+  const [y, m, d] = dateISO.split('-')
+  return `${d}/${m}/${y}`
+}
+
 const positionsComputed = computed(() =>
   positions.value.map((p) => {
     const isCedear = p.assetType === 'CEDEAR'
@@ -453,13 +459,24 @@ let lineChart = null
 const performanceView = ref('DIARIO') // 'DIARIO' | 'MENSUAL'
 const historyTick = ref(0) // se incrementa cada vez que grabamos un snapshot, para recalcular las series
 
-// Graba (o actualiza) el valor de hoy de la cartera seleccionada, para ir
+// Grabar el snapshot de hoy con el valor total de la cartera, para ir
 // armando el historial real de rendimiento con el uso diario de la app.
 function recordTodaySnapshot() {
   if (!selectedId.value || !(totalValueARS.value > 0)) return
+  seedFromInception(selectedId.value, inceptionDate.value, totalInvestedARS.value)
   recordSnapshot(selectedId.value, totalValueARS.value)
   historyTick.value++
 }
+
+// Fecha de alta de la cartera: la más antigua entre la fecha de creación de
+// la cartera y la de sus posiciones (así, si agregaste una posición hace un
+// mes, el gráfico arranca ahí en vez de "hoy").
+const inceptionDate = computed(() => {
+  const dates = positions.value.map((p) => p.createdAt).filter(Boolean)
+  if (selectedPortfolio.value?.createdAt) dates.push(selectedPortfolio.value.createdAt)
+  if (!dates.length) return null
+  return dates.reduce((earliest, d) => (d < earliest ? d : earliest)).slice(0, 10)
+})
 
 const dailyReturns = computed(() => {
   historyTick.value // dependencia reactiva
@@ -777,11 +794,15 @@ function onOverlayClick(e) {
                     <div class="chart-canvas-wrap">
                       <canvas v-show="hasEnoughHistory" ref="lineCanvas"></canvas>
                       <div v-if="!hasEnoughHistory" class="empty-state-small chart-empty">
-                        Todavía no hay suficiente historial para graficar el rendimiento
-                        {{ performanceView === 'DIARIO' ? 'diario' : 'mensual' }}.
-                        Ninguna fuente de precios de CEDEARs/acciones argentinas te da datos históricos gratis, así que
-                        este gráfico se arma solo, con el valor de la cartera cada día que la abrís
-                        {{ performanceView === 'MENSUAL' ? '(hacen falta al menos 2 meses distintos con datos)' : '(hacen falta al menos 2 días distintos con datos)' }}.
+                        <template v-if="performanceView === 'DIARIO'">
+                          Todavía no hay dos días distintos para comparar. En cuanto vuelvas a abrir la cartera otro día
+                          (o si la diste de alta hace tiempo, en cuanto recarguemos el precio de hoy) va a aparecer el
+                          primer punto: costo al alta ({{ formatDateShort(inceptionDate) }}) vs. valor de mercado actual.
+                        </template>
+                        <template v-else>
+                          El rendimiento mensual necesita al menos dos meses calendario distintos con datos. Si la
+                          cartera es de este mes, va a mostrarse a partir del mes que viene.
+                        </template>
                       </div>
                     </div>
                   </div>

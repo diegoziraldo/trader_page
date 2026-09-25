@@ -60,6 +60,22 @@ export function getHistory(portfolioId) {
   return readHistory(portfolioId)
 }
 
+// Siembra UN punto de referencia real usando datos que ya existen en la
+// base (la fecha de alta de la cartera/posiciones y el costo invertido a
+// esa fecha), para no depender de "esperar varios días" antes de poder
+// mostrar cualquier gráfico. No inventa precios de mercado históricos —
+// usa el costo (cantidad × precio promedio) como mejor valor conocido para
+// esa fecha. Solo actúa si TODAVÍA no hay ningún historial real grabado
+// para esta cartera, para no pisar datos ya trackeados.
+export function seedFromInception(portfolioId, inceptionDateISO, investedValueARS) {
+  if (!portfolioId || !inceptionDateISO || !(investedValueARS > 0)) return readHistory(portfolioId)
+  const history = readHistory(portfolioId)
+  if (history.length > 0) return history
+  const seeded = [{ date: inceptionDateISO, value: investedValueARS }]
+  writeHistory(portfolioId, seeded)
+  return seeded
+}
+
 // Serie de rendimiento DIARIO: % de variación entre cada día y el anterior,
 // para los últimos `days` puntos disponibles.
 export function getDailyReturns(portfolioId, days = 30) {
