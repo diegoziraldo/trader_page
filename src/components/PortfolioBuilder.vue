@@ -1,5 +1,5 @@
 <script setup>
-import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
+import { ref, reactive, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import {
   getPortfolios,
   createPortfolio,
@@ -13,6 +13,8 @@ import {
 import { fetchQuote, getTheoreticalCedear } from '../services/stockService'
 import { useDolar } from '../composables/useDolar'
 import { PORTFOLIO_ASSET_BY_TICKER } from '../data/argentinePortfolioAssets'
+import { recordSnapshot, getDailyReturns, getMonthlyReturns } from '../services/local/portfolioHistoryLocal'
+import Chart from 'chart.js/auto'
 
 const emit = defineEmits(['close'])
 
@@ -440,14 +442,126 @@ const diversificationVerdict = computed(() => {
   return { label: 'Poco diversificada', detail: sectorCount <= 2 ? `solo ${sectorCount} sector(es) representado(s)` : 'hay posiciones que concentran gran parte del valor' }
 })
 
+// =========================================================
+// GRÁFICOS: torta de ponderación por papel + línea de rendimiento
+// =========================================================
+const pieCanvas = ref(null)
+const lineCanvas = ref(null)
+let pieChart = null
+let lineChart = null
+
+const performanceView = ref('DIARIO') // 'DIARIO' | 'MENSUAL'
+const historyTick = ref(0) // se incrementa cada vez que grabamos un snapshot, para recalcular las series
+
+// Graba (o actualiza) el valor de hoy de la cartera seleccionada, para ir
+// armando el historial real de rendimiento con el uso diario de la app.
+function recordTodaySnapshot() {
+  if (!selectedId.value || !(totalValueARS.value > 0)) return
+  recordSnapshot(selectedId.value, totalValueARS.value)
+  historyTick.value++
+}
+
+const dailyReturns = computed(() => {
+  historyTick.value // dependencia reactiva
+  return selectedId.value ? getDailyReturns(selectedId.value, 30) : { labels: [], values: [], pointCount: 0 }
+})
+const monthlyReturns = computed(() => {
+  historyTick.value
+  return selectedId.value ? getMonthlyReturns(selectedId.value, 12) : { labels: [], values: [], pointCount: 0 }
+})
+const activeReturns = computed(() => (performanceView.value === 'DIARIO' ? dailyReturns.value : monthlyReturns.value))
+const hasEnoughHistory = computed(() => activeReturns.value.values.length > 0)
+
+function renderPieChart() {
+  if (!pieCanvas.value) return
+  const data = breakdownByCompany.value
+  if (pieChart) pieChart.destroy()
+  if (!data.length) return
+  pieChart = new Chart(pieCanvas.value, {
+    type: 'pie',
+    data: {
+      labels: data.map((d) => d.label),
+      datasets: [{
+        data: data.map((d) => d.pct),
+        backgroundColor: data.map((d) => sectorColor(d.sector)),
+        borderColor: 'rgba(0,0,0,0.25)',
+        borderWidth: 1,
+      }],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { position: 'right', labels: { color: '#b0b4bc', boxWidth: 12, font: { size: 11 } } },
+        tooltip: {
+          callbacks: {
+            label: (ctx) => `${ctx.label}: ${ctx.parsed.toFixed(2)}%`,
+          },
+        },
+      },
+    },
+  })
+}
+
+function renderLineChart() {
+  if (!lineCanvas.value) return
+  const { labels, values } = activeReturns.value
+  if (lineChart) lineChart.destroy()
+  if (!values.length) return
+  lineChart = new Chart(lineCanvas.value, {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [{
+        label: performanceView.value === 'DIARIO' ? 'Rendimiento diario (%)' : 'Rendimiento mensual (%)',
+        data: values,
+        borderColor: '#2563eb',
+        backgroundColor: 'rgba(37, 99, 235, 0.15)',
+        pointBackgroundColor: values.map((v) => (v >= 0 ? '#22c55e' : '#ef4444')),
+        pointRadius: 3,
+        tension: 0.25,
+        fill: true,
+      }],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      scales: {
+        x: { ticks: { color: '#b0b4bc', font: { size: 11 } }, grid: { color: 'rgba(255,255,255,0.06)' } },
+        y: {
+          ticks: { color: '#b0b4bc', font: { size: 11 }, callback: (v) => `${v}%` },
+          grid: { color: 'rgba(255,255,255,0.06)' },
+        },
+      },
+      plugins: {
+        legend: { display: false },
+        tooltip: { callbacks: { label: (ctx) => `${ctx.parsed.y >= 0 ? '+' : ''}${ctx.parsed.y.toFixed(2)}%` } },
+      },
+    },
+  })
+}
+
+watch(breakdownByCompany, () => nextTick(renderPieChart), { deep: true })
+watch(activeReturns, () => nextTick(renderLineChart), { deep: true })
+watch(performanceView, () => nextTick(renderLineChart))
+watch(totalValueARS, (val) => {
+  if (val > 0) recordTodaySnapshot()
+})
+
 onMounted(async () => {
   await loadPortfolios()
   await loadPositions()
+  recordTodaySnapshot()
+  await nextTick()
+  renderPieChart()
+  renderLineChart()
   refreshTimer = setInterval(refreshLivePrices, REFRESH_MS)
 })
 
 onUnmounted(() => {
   if (refreshTimer) clearInterval(refreshTimer)
+  if (pieChart) pieChart.destroy()
+  if (lineChart) lineChart.destroy()
 })
 
 function close() {
@@ -628,6 +742,47 @@ function onOverlayClick(e) {
                         <div class="bar-fill" :style="{ width: b.pct + '%', backgroundColor: sectorColor(b.sector) }"></div>
                       </div>
                       <span class="bar-pct">{{ formatMoney(b.pct) }}%</span>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- Gráficos: torta de ponderación + línea de rendimiento -->
+                <div v-if="positions.length" class="charts-section">
+                  <div class="chart-card">
+                    <div class="chart-card-header">
+                      <div class="section-title">Ponderación por papel</div>
+                    </div>
+                    <div class="chart-canvas-wrap">
+                      <canvas ref="pieCanvas"></canvas>
+                    </div>
+                  </div>
+                  <div class="chart-card">
+                    <div class="chart-card-header">
+                      <div class="section-title">Rendimiento de la cartera</div>
+                      <div class="view-toggle">
+                        <button
+                          type="button"
+                          class="filter-btn"
+                          :class="{ active: performanceView === 'DIARIO' }"
+                          @click="performanceView = 'DIARIO'"
+                        >Diario</button>
+                        <button
+                          type="button"
+                          class="filter-btn"
+                          :class="{ active: performanceView === 'MENSUAL' }"
+                          @click="performanceView = 'MENSUAL'"
+                        >Mensual</button>
+                      </div>
+                    </div>
+                    <div class="chart-canvas-wrap">
+                      <canvas v-show="hasEnoughHistory" ref="lineCanvas"></canvas>
+                      <div v-if="!hasEnoughHistory" class="empty-state-small chart-empty">
+                        Todavía no hay suficiente historial para graficar el rendimiento
+                        {{ performanceView === 'DIARIO' ? 'diario' : 'mensual' }}.
+                        Ninguna fuente de precios de CEDEARs/acciones argentinas te da datos históricos gratis, así que
+                        este gráfico se arma solo, con el valor de la cartera cada día que la abrís
+                        {{ performanceView === 'MENSUAL' ? '(hacen falta al menos 2 meses distintos con datos)' : '(hacen falta al menos 2 días distintos con datos)' }}.
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -1073,6 +1228,51 @@ function onOverlayClick(e) {
   height: 9px;
   border-radius: 50%;
   flex-shrink: 0;
+}
+
+.charts-section {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 20px;
+}
+
+.chart-card {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 18px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.chart-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.view-toggle {
+  display: flex;
+  gap: 6px;
+}
+
+.chart-canvas-wrap {
+  position: relative;
+  height: 260px;
+}
+
+.chart-empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 0 10px;
+  line-height: 1.6;
 }
 
 .section-title {

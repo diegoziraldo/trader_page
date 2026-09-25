@@ -13,6 +13,7 @@
     "db:migrate:remote": "wrangler d1 execute DB --remote --file=./schema.sql"
   },
   "dependencies": {
+    "chart.js": "^4.4.4",
     "hono": "^4.6.0",
     "vue": "^3.4.21"
   },
