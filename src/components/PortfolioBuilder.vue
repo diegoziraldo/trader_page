@@ -13,7 +13,7 @@ import {
 import { fetchQuote, getTheoreticalCedear } from '../services/stockService'
 import { useDolar } from '../composables/useDolar'
 import { PORTFOLIO_ASSET_BY_TICKER } from '../data/argentinePortfolioAssets'
-import { recordSnapshot, seedFromInception, getDailyReturns, getMonthlyReturns } from '../services/local/portfolioHistoryLocal'
+import { recordSnapshot, seedFromInception, getDailyReturns, getMonthlyReturns, recordIntradayPoint, getIntradayReturns } from '../services/local/portfolioHistoryLocal'
 import Chart from 'chart.js/auto'
 
 const emit = defineEmits(['close'])
@@ -465,6 +465,7 @@ function recordTodaySnapshot() {
   if (!selectedId.value || !(totalValueARS.value > 0)) return
   seedFromInception(selectedId.value, inceptionDate.value, totalInvestedARS.value)
   recordSnapshot(selectedId.value, totalValueARS.value)
+  recordIntradayPoint(selectedId.value, totalValueARS.value)
   historyTick.value++
 }
 
@@ -486,7 +487,22 @@ const monthlyReturns = computed(() => {
   historyTick.value
   return selectedId.value ? getMonthlyReturns(selectedId.value, 12) : { labels: [], values: [], pointCount: 0 }
 })
-const activeReturns = computed(() => (performanceView.value === 'DIARIO' ? dailyReturns.value : monthlyReturns.value))
+const intradayReturns = computed(() => {
+  historyTick.value
+  return selectedId.value ? getIntradayReturns(selectedId.value) : { labels: [], values: [], pointCount: 0 }
+})
+
+// En la vista "Diario": si ya hay comparación real entre dos días distintos,
+// se usa esa. Si todavía no (típicamente, cartera dada de alta hoy mismo,
+// sin un "ayer" posible), se cae automáticamente al intradiario de hoy, que
+// sí es un dato 100% real disponible desde el primer momento.
+const usingIntradayFallback = computed(
+  () => performanceView.value === 'DIARIO' && dailyReturns.value.values.length === 0 && intradayReturns.value.values.length >= 2
+)
+const activeReturns = computed(() => {
+  if (performanceView.value === 'MENSUAL') return monthlyReturns.value
+  return usingIntradayFallback.value ? intradayReturns.value : dailyReturns.value
+})
 const hasEnoughHistory = computed(() => activeReturns.value.values.length > 0)
 
 function renderPieChart() {
@@ -525,12 +541,15 @@ function renderLineChart() {
   const { labels, values } = activeReturns.value
   if (lineChart) lineChart.destroy()
   if (!values.length) return
+  const label = usingIntradayFallback.value
+    ? 'Rendimiento intradiario de hoy (%)'
+    : performanceView.value === 'DIARIO' ? 'Rendimiento diario (%)' : 'Rendimiento mensual (%)'
   lineChart = new Chart(lineCanvas.value, {
     type: 'line',
     data: {
       labels,
       datasets: [{
-        label: performanceView.value === 'DIARIO' ? 'Rendimiento diario (%)' : 'Rendimiento mensual (%)',
+        label,
         data: values,
         borderColor: '#2563eb',
         backgroundColor: 'rgba(37, 99, 235, 0.15)',
@@ -775,7 +794,10 @@ function onOverlayClick(e) {
                   </div>
                   <div class="chart-card">
                     <div class="chart-card-header">
-                      <div class="section-title">Rendimiento de la cartera</div>
+                      <div class="section-title">
+                        Rendimiento de la cartera
+                        <span v-if="usingIntradayFallback" class="intraday-badge" title="Todavía no hay un día anterior real para comparar, así que se muestra cómo varió el valor de la cartera hoy.">intradía</span>
+                      </div>
                       <div class="view-toggle">
                         <button
                           type="button"
@@ -795,9 +817,8 @@ function onOverlayClick(e) {
                       <canvas v-show="hasEnoughHistory" ref="lineCanvas"></canvas>
                       <div v-if="!hasEnoughHistory" class="empty-state-small chart-empty">
                         <template v-if="performanceView === 'DIARIO'">
-                          Todavía no hay dos días distintos para comparar. En cuanto vuelvas a abrir la cartera otro día
-                          (o si la diste de alta hace tiempo, en cuanto recarguemos el precio de hoy) va a aparecer el
-                          primer punto: costo al alta ({{ formatDateShort(inceptionDate) }}) vs. valor de mercado actual.
+                          Armando el gráfico intradiario con los precios de hoy — esperá el próximo refresco de
+                          precios (cada 30 segundos) para ver el primer tramo.
                         </template>
                         <template v-else>
                           El rendimiento mensual necesita al menos dos meses calendario distintos con datos. Si la
@@ -1273,6 +1294,20 @@ function onOverlayClick(e) {
   justify-content: space-between;
   flex-wrap: wrap;
   gap: 8px;
+}
+
+.intraday-badge {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 700;
+  background: rgba(234, 179, 8, 0.15);
+  color: #eab308;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  vertical-align: middle;
 }
 
 .view-toggle {
