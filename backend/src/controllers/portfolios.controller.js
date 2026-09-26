@@ -235,6 +235,33 @@ function removePosition(req, res) {
   res.status(204).send();
 }
 
+// GET /api/portfolios/:id/snapshots
+function getSnapshots(req, res) {
+  const rows = db
+    .prepare('SELECT snapshot_date as date, value_ars as value FROM portfolio_value_snapshots WHERE portfolio_id = ? ORDER BY snapshot_date ASC')
+    .all(req.params.id)
+  res.json(rows)
+}
+
+// POST /api/portfolios/:id/snapshots  { date: 'YYYY-MM-DD', valueARS: number }
+// Upsert: si ya existe un snapshot para esa cartera y esa fecha, lo actualiza
+// (así el gráfico refleja el último precio del día, no el primero).
+function recordSnapshot(req, res) {
+  const { date, valueARS } = req.body
+  if (!date || !(Number(valueARS) > 0)) {
+    return res.status(400).json({ error: 'date y valueARS (mayor a 0) son requeridos' })
+  }
+  const portfolio = db.prepare('SELECT id FROM portfolios WHERE id = ?').get(req.params.id)
+  if (!portfolio) return res.status(404).json({ error: 'Cartera no encontrada' })
+
+  db.prepare(
+    `INSERT INTO portfolio_value_snapshots (portfolio_id, snapshot_date, value_ars)
+     VALUES (?, ?, ?)
+     ON CONFLICT(portfolio_id, snapshot_date) DO UPDATE SET value_ars = excluded.value_ars`
+  ).run(req.params.id, date, Number(valueARS))
+  res.status(204).send()
+}
+
 module.exports = {
   getAllPortfolios,
   createPortfolio,
@@ -244,4 +271,6 @@ module.exports = {
   createPosition,
   updatePosition,
   removePosition,
+  getSnapshots,
+  recordSnapshot,
 };

@@ -12,9 +12,7 @@
 // Es información puramente local a este navegador/dispositivo.
 
 const PREFIX = 'pf-history:'
-const INTRADAY_PREFIX = 'pf-intraday:'
 const MAX_POINTS = 400 // ~13 meses de snapshots diarios
-const MAX_INTRADAY_POINTS = 600 // de sobra para un día de refrescos cada 30s
 
 // Fecha local (no UTC): con UTC-3 (Argentina), usar toISOString() corre el
 // "día" hasta 3 horas antes de la medianoche real, lo que hacía que un
@@ -70,69 +68,29 @@ export function getHistory(portfolioId) {
   return readHistory(portfolioId)
 }
 
-// Registra un punto INTRADIARIO (hora + valor) para el día de hoy. Esto es
-// lo que permite mostrar un gráfico real el mismo día en que diste de alta
-// la cartera: no hay forma de tener un "ayer" que no existió, pero sí hay
-// forma de mostrar cómo se movió el valor de la cartera a lo largo de hoy,
-// con datos 100% reales tomados en cada actualización de precios. Se
-// reinicia solo al cambiar de día.
-export function recordIntradayPoint(portfolioId, valueARS) {
-  if (!portfolioId || !(valueARS > 0)) return []
-  const key = INTRADAY_PREFIX + portfolioId
-  const today = todayISO()
-  let data
-  try {
-    data = JSON.parse(localStorage.getItem(key) || 'null')
-  } catch {
-    data = null
-  }
-  if (!data || data.date !== today) data = { date: today, points: [] }
-  const now = new Date()
-  const time = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`
-  data.points.push({ time, value: valueARS })
-  if (data.points.length > MAX_INTRADAY_POINTS) data.points = data.points.slice(-MAX_INTRADAY_POINTS)
-  try {
-    localStorage.setItem(key, JSON.stringify(data))
-  } catch {
-    // localStorage lleno o no disponible: no rompemos la app por esto.
-  }
-  return data.points
-}
-
-// Serie INTRADIARIA de hoy: % de variación de cada punto contra el primer
-// valor registrado hoy (apertura de la sesión de uso, no apertura de
-// mercado, ya que no tenemos esa referencia).
-export function getIntradayReturns(portfolioId) {
-  const key = INTRADAY_PREFIX + portfolioId
-  let data
-  try {
-    data = JSON.parse(localStorage.getItem(key) || 'null')
-  } catch {
-    data = null
-  }
-  if (!data || data.date !== todayISO() || !data.points.length) {
-    return { labels: [], values: [], pointCount: 0, baseTime: null }
-  }
-  const base = data.points[0].value
-  const labels = data.points.map((p) => p.time)
-  const values = data.points.map((p) => (base > 0 ? ((p.value - base) / base) * 100 : 0))
-  return { labels, values, pointCount: data.points.length, baseTime: data.points[0].time }
-}
-
 // Siembra UN punto de referencia real usando datos que ya existen en la
 // base (la fecha de alta de la cartera/posiciones y el costo invertido a
 // esa fecha), para no depender de "esperar varios días" antes de poder
 // mostrar cualquier gráfico. No inventa precios de mercado históricos —
 // usa el costo (cantidad × precio promedio) como mejor valor conocido para
-// esa fecha. Solo actúa si TODAVÍA no hay ningún historial real grabado
-// para esta cartera, para no pisar datos ya trackeados.
+// esa fecha.
+//
+// Solo actúa si el dato más antiguo que ya tenemos guardado es POSTERIOR a
+// la fecha de alta real (por ejemplo: la cartera se dio de alta hace dos
+// días, pero el tracking recién arrancó hoy). En ese caso inserta el punto
+// de alta al principio, sin pisar ningún dato ya trackeado. Si ya hay un
+// punto en la fecha de alta o anterior, no hace falta hacer nada.
 export function seedFromInception(portfolioId, inceptionDateISO, investedValueARS) {
   if (!portfolioId || !inceptionDateISO || !(investedValueARS > 0)) return readHistory(portfolioId)
   const history = readHistory(portfolioId)
-  if (history.length > 0) return history
-  const seeded = [{ date: inceptionDateISO, value: investedValueARS }]
-  writeHistory(portfolioId, seeded)
-  return seeded
+  const earliest = history[0]?.date
+  if (earliest && earliest <= inceptionDateISO) return history
+  const withSeed = [
+    { date: inceptionDateISO, value: investedValueARS },
+    ...history.filter((h) => h.date !== inceptionDateISO),
+  ].sort((a, b) => a.date.localeCompare(b.date))
+  writeHistory(portfolioId, withSeed)
+  return withSeed
 }
 
 // Serie de rendimiento DIARIO: % de variación entre cada día y el anterior,

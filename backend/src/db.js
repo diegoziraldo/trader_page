@@ -201,6 +201,16 @@ db.exec(`
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
 `);
+db.exec(`
+  CREATE TABLE IF NOT EXISTS portfolio_value_snapshots (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    portfolio_id INTEGER NOT NULL REFERENCES portfolios(id) ON DELETE CASCADE,
+    snapshot_date TEXT NOT NULL,
+    value_ars REAL NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(portfolio_id, snapshot_date)
+  );
+`);
 db.pragma('foreign_keys = ON');
 
 module.exports = db;

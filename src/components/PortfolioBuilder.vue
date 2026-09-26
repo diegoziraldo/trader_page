@@ -13,7 +13,7 @@ import {
 import { fetchQuote, getTheoreticalCedear } from '../services/stockService'
 import { useDolar } from '../composables/useDolar'
 import { PORTFOLIO_ASSET_BY_TICKER } from '../data/argentinePortfolioAssets'
-import { recordSnapshot, seedFromInception, getDailyReturns, getMonthlyReturns, recordIntradayPoint, getIntradayReturns } from '../services/local/portfolioHistoryLocal'
+import { recordSnapshot, seedFromInception, getDailyReturns, getMonthlyReturns } from '../services/local/portfolioHistoryLocal'
 import Chart from 'chart.js/auto'
 
 const emit = defineEmits(['close'])
@@ -75,6 +75,7 @@ async function loadPositions() {
 async function selectPortfolio(id) {
   selectedId.value = id
   await loadPositions()
+  recordTodaySnapshot()
 }
 
 async function addPortfolio() {
@@ -458,6 +459,21 @@ let lineChart = null
 
 const performanceView = ref('DIARIO') // 'DIARIO' | 'MENSUAL'
 const historyTick = ref(0) // se incrementa cada vez que grabamos un snapshot, para recalcular las series
+const showDebug = ref(false)
+
+const debugInfo = computed(() => {
+  historyTick.value
+  if (!selectedId.value) return ''
+  let rawHistory = null
+  try { rawHistory = localStorage.getItem('pf-history:' + selectedId.value) } catch { rawHistory = '(error leyendo localStorage)' }
+  return JSON.stringify({
+    portfolioId: selectedId.value,
+    inceptionDate: inceptionDate.value,
+    totalValueARS: totalValueARS.value,
+    totalInvestedARS: totalInvestedARS.value,
+    history: rawHistory ? JSON.parse(rawHistory) : null,
+  }, null, 2)
+})
 
 // Grabar el snapshot de hoy con el valor total de la cartera, para ir
 // armando el historial real de rendimiento con el uso diario de la app.
@@ -465,7 +481,6 @@ function recordTodaySnapshot() {
   if (!selectedId.value || !(totalValueARS.value > 0)) return
   seedFromInception(selectedId.value, inceptionDate.value, totalInvestedARS.value)
   recordSnapshot(selectedId.value, totalValueARS.value)
-  recordIntradayPoint(selectedId.value, totalValueARS.value)
   historyTick.value++
 }
 
@@ -487,22 +502,7 @@ const monthlyReturns = computed(() => {
   historyTick.value
   return selectedId.value ? getMonthlyReturns(selectedId.value, 12) : { labels: [], values: [], pointCount: 0 }
 })
-const intradayReturns = computed(() => {
-  historyTick.value
-  return selectedId.value ? getIntradayReturns(selectedId.value) : { labels: [], values: [], pointCount: 0 }
-})
-
-// En la vista "Diario": si ya hay comparación real entre dos días distintos,
-// se usa esa. Si todavía no (típicamente, cartera dada de alta hoy mismo,
-// sin un "ayer" posible), se cae automáticamente al intradiario de hoy, que
-// sí es un dato 100% real disponible desde el primer momento.
-const usingIntradayFallback = computed(
-  () => performanceView.value === 'DIARIO' && dailyReturns.value.values.length === 0 && intradayReturns.value.values.length >= 2
-)
-const activeReturns = computed(() => {
-  if (performanceView.value === 'MENSUAL') return monthlyReturns.value
-  return usingIntradayFallback.value ? intradayReturns.value : dailyReturns.value
-})
+const activeReturns = computed(() => (performanceView.value === 'DIARIO' ? dailyReturns.value : monthlyReturns.value))
 const hasEnoughHistory = computed(() => activeReturns.value.values.length > 0)
 
 function renderPieChart() {
@@ -541,9 +541,7 @@ function renderLineChart() {
   const { labels, values } = activeReturns.value
   if (lineChart) lineChart.destroy()
   if (!values.length) return
-  const label = usingIntradayFallback.value
-    ? 'Rendimiento intradiario de hoy (%)'
-    : performanceView.value === 'DIARIO' ? 'Rendimiento diario (%)' : 'Rendimiento mensual (%)'
+  const label = performanceView.value === 'DIARIO' ? 'Rendimiento diario (%)' : 'Rendimiento mensual (%)'
   lineChart = new Chart(lineCanvas.value, {
     type: 'line',
     data: {
@@ -616,6 +614,7 @@ function onOverlayClick(e) {
         <div class="pf-title">
           <span class="pf-icon">🧩</span>
           Armado de Carteras
+          <span class="build-tag" title="Si este número no cambió después de un deploy nuevo, el navegador está sirviendo el JS viejo (caché) y hay que forzar una recarga.">build 2026-09-25.2</span>
         </div>
         <button class="close-btn" @click="close" title="Cerrar">✕</button>
       </div>
@@ -796,7 +795,6 @@ function onOverlayClick(e) {
                     <div class="chart-card-header">
                       <div class="section-title">
                         Rendimiento de la cartera
-                        <span v-if="usingIntradayFallback" class="intraday-badge" title="Todavía no hay un día anterior real para comparar, así que se muestra cómo varió el valor de la cartera hoy.">intradía</span>
                       </div>
                       <div class="view-toggle">
                         <button
@@ -817,8 +815,10 @@ function onOverlayClick(e) {
                       <canvas v-show="hasEnoughHistory" ref="lineCanvas"></canvas>
                       <div v-if="!hasEnoughHistory" class="empty-state-small chart-empty">
                         <template v-if="performanceView === 'DIARIO'">
-                          Armando el gráfico intradiario con los precios de hoy — esperá el próximo refresco de
-                          precios (cada 30 segundos) para ver el primer tramo.
+                          Todavía no hay dos días distintos registrados para esta cartera. Si la diste de alta hace
+                          poco, necesita al menos un día más de diferencia entre el costo al alta
+                          ({{ formatDateShort(inceptionDate) }}) y hoy. Si ya pasaron días y sigue sin aparecer,
+                          hacé clic en "Ver datos del historial guardado" más abajo y pasámelo.
                         </template>
                         <template v-else>
                           El rendimiento mensual necesita al menos dos meses calendario distintos con datos. Si la
@@ -826,6 +826,10 @@ function onOverlayClick(e) {
                         </template>
                       </div>
                     </div>
+                    <button type="button" class="debug-toggle" @click="showDebug = !showDebug">
+                      {{ showDebug ? 'Ocultar' : 'Ver' }} datos del historial guardado
+                    </button>
+                    <pre v-if="showDebug" class="debug-panel">{{ debugInfo }}</pre>
                   </div>
                 </div>
 
@@ -1040,6 +1044,17 @@ function onOverlayClick(e) {
   display: flex;
   align-items: center;
   gap: 10px;
+}
+
+.build-tag {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-dim);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 2px 7px;
+  letter-spacing: 0.02em;
 }
 
 .close-btn {
@@ -1296,20 +1311,6 @@ function onOverlayClick(e) {
   gap: 8px;
 }
 
-.intraday-badge {
-  display: inline-block;
-  margin-left: 8px;
-  padding: 2px 8px;
-  border-radius: 999px;
-  font-size: 10.5px;
-  font-weight: 700;
-  background: rgba(234, 179, 8, 0.15);
-  color: #eab308;
-  text-transform: uppercase;
-  letter-spacing: 0.03em;
-  vertical-align: middle;
-}
-
 .view-toggle {
   display: flex;
   gap: 6px;
@@ -1329,6 +1330,34 @@ function onOverlayClick(e) {
   text-align: center;
   padding: 0 10px;
   line-height: 1.6;
+}
+
+.debug-toggle {
+  align-self: flex-start;
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  font-size: 11px;
+  text-decoration: underline;
+  cursor: pointer;
+  padding: 0;
+}
+
+.debug-toggle:hover {
+  color: var(--text);
+}
+
+.debug-panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 11px;
+  color: var(--text-dim);
+  max-height: 220px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .section-title {
