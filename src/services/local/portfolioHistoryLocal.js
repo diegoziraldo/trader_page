@@ -1,23 +1,24 @@
 // src/services/local/portfolioHistoryLocal.js
 //
-// Historial de valor de la cartera para armar los gráficos de rendimiento
-// diario y mensual.
+// Historial de VALOR de la cartera (en ARS), para graficar la curva completa
+// desde el alta hasta hoy.
 //
 // Por qué vive en localStorage y no en la base de datos: ni Finnhub (plan
 // gratuito) ni las fuentes de CEDEARs/acciones argentinas que usa esta app
-// dan velas históricas, así que no hay forma de "reconstruir" el rendimiento
-// pasado de la cartera. Lo que sí podemos hacer es ir grabando un snapshot
-// del valor total cada día que abrís la cartera, y con eso armar un
-// historial real (aunque arranque desde hoy) sin tocar el schema de D1.
-// Es información puramente local a este navegador/dispositivo.
+// dan velas históricas, así que no hay forma de "traer" el precio pasado de
+// estos instrumentos. Lo que sí podemos hacer es: (1) grabar el valor total
+// de la cartera cada vez que la abrís, y (2) sembrar el primer punto con el
+// costo invertido a la fecha de alta real (dato que ya existe en la base:
+// created_at de la cartera/posiciones), para no depender de "esperar varios
+// días" antes de tener una curva. Es información puramente local a este
+// navegador/dispositivo — no toca el schema de D1 ni el backend.
 
 const PREFIX = 'pf-history:'
 const MAX_POINTS = 400 // ~13 meses de snapshots diarios
 
-// Fecha local (no UTC): con UTC-3 (Argentina), usar toISOString() corre el
-// "día" hasta 3 horas antes de la medianoche real, lo que hacía que un
-// snapshot cargado a la noche quedara fechado "mañana". Esto usa el
-// calendario del navegador del usuario.
+// Fecha local (no UTC): con UTC-3 (Argentina), toISOString() corre el "día"
+// hasta 3 horas antes de la medianoche real. Esto usa el calendario del
+// navegador del usuario.
 function todayISO() {
   const d = new Date()
   const y = d.getFullYear()
@@ -68,18 +69,11 @@ export function getHistory(portfolioId) {
   return readHistory(portfolioId)
 }
 
-// Siembra UN punto de referencia real usando datos que ya existen en la
-// base (la fecha de alta de la cartera/posiciones y el costo invertido a
-// esa fecha), para no depender de "esperar varios días" antes de poder
-// mostrar cualquier gráfico. No inventa precios de mercado históricos —
-// usa el costo (cantidad × precio promedio) como mejor valor conocido para
-// esa fecha.
-//
-// Solo actúa si el dato más antiguo que ya tenemos guardado es POSTERIOR a
-// la fecha de alta real (por ejemplo: la cartera se dio de alta hace dos
-// días, pero el tracking recién arrancó hoy). En ese caso inserta el punto
-// de alta al principio, sin pisar ningún dato ya trackeado. Si ya hay un
-// punto en la fecha de alta o anterior, no hace falta hacer nada.
+// Siembra el punto de ALTA usando datos que ya existen en la base (fecha de
+// creación de la cartera/posiciones + costo invertido a hoy, como mejor
+// proxy disponible del costo a esa fecha). No inventa precios de mercado
+// históricos. Solo inserta el punto si no hay ya un dato tan antiguo o más
+// antiguo que la fecha de alta (para no pisar historial real ya trackeado).
 export function seedFromInception(portfolioId, inceptionDateISO, investedValueARS) {
   if (!portfolioId || !inceptionDateISO || !(investedValueARS > 0)) return readHistory(portfolioId)
   const history = readHistory(portfolioId)
@@ -93,46 +87,33 @@ export function seedFromInception(portfolioId, inceptionDateISO, investedValueAR
   return withSeed
 }
 
-// Serie de rendimiento DIARIO: % de variación entre cada día y el anterior,
-// para los últimos `days` puntos disponibles.
-export function getDailyReturns(portfolioId, days = 30) {
-  const history = readHistory(portfolioId).slice(-(days + 1))
-  const labels = []
-  const values = []
-  for (let i = 1; i < history.length; i++) {
-    const prev = history[i - 1].value
-    const curr = history[i].value
-    if (prev > 0) {
-      const [, m, d] = history[i].date.split('-')
-      labels.push(`${d}/${m}`)
-      values.push(((curr - prev) / prev) * 100)
-    }
-  }
-  return { labels, values, pointCount: history.length }
+// Serie DIARIA completa: el valor de la cartera (ARS) en cada día
+// registrado, desde el alta hasta hoy (o los últimos `days` si hay más
+// historial que eso). Esto es la curva "de punta a punta" para graficar.
+export function getDailySeries(portfolioId, days = 90) {
+  const history = readHistory(portfolioId).slice(-days)
+  const labels = history.map((h) => {
+    const [, m, d] = h.date.split('-')
+    return `${d}/${m}`
+  })
+  const values = history.map((h) => h.value)
+  return { labels, values, dates: history.map((h) => h.date) }
 }
 
-// Serie de rendimiento MENSUAL: toma el último snapshot de cada mes
-// calendario y calcula la variación % contra el último snapshot del mes
-// anterior.
-export function getMonthlyReturns(portfolioId, months = 12) {
+// Serie MENSUAL: el último valor registrado de cada mes calendario, desde
+// el alta hasta hoy.
+export function getMonthlySeries(portfolioId, months = 24) {
   const history = readHistory(portfolioId)
-  const lastByMonth = new Map() // 'YYYY-MM' -> { date, value }
+  const lastByMonth = new Map() // 'YYYY-MM' -> punto
   for (const point of history) {
-    const monthKey = point.date.slice(0, 7)
-    lastByMonth.set(monthKey, point) // como viene ordenado asc, el último pisa
+    lastByMonth.set(point.date.slice(0, 7), point) // ordenado asc: el último pisa
   }
-  const monthKeys = [...lastByMonth.keys()].sort().slice(-(months + 1))
-  const labels = []
-  const values = []
+  const monthKeys = [...lastByMonth.keys()].sort().slice(-months)
   const MONTH_LABELS = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic']
-  for (let i = 1; i < monthKeys.length; i++) {
-    const prev = lastByMonth.get(monthKeys[i - 1]).value
-    const curr = lastByMonth.get(monthKeys[i]).value
-    if (prev > 0) {
-      const [, m] = monthKeys[i].split('-')
-      labels.push(MONTH_LABELS[Number(m) - 1])
-      values.push(((curr - prev) / prev) * 100)
-    }
-  }
-  return { labels, values, pointCount: monthKeys.length }
+  const labels = monthKeys.map((k) => {
+    const [y, m] = k.split('-')
+    return `${MONTH_LABELS[Number(m) - 1]} ${y.slice(2)}`
+  })
+  const values = monthKeys.map((k) => lastByMonth.get(k).value)
+  return { labels, values, dates: monthKeys }
 }

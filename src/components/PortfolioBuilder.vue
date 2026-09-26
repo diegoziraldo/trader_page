@@ -13,7 +13,7 @@ import {
 import { fetchQuote, getTheoreticalCedear } from '../services/stockService'
 import { useDolar } from '../composables/useDolar'
 import { PORTFOLIO_ASSET_BY_TICKER } from '../data/argentinePortfolioAssets'
-import { recordSnapshot, seedFromInception, getDailyReturns, getMonthlyReturns } from '../services/local/portfolioHistoryLocal'
+import { recordSnapshot, seedFromInception, getDailySeries, getMonthlySeries } from '../services/local/portfolioHistoryLocal'
 import Chart from 'chart.js/auto'
 
 const emit = defineEmits(['close'])
@@ -494,16 +494,23 @@ const inceptionDate = computed(() => {
   return dates.reduce((earliest, d) => (d < earliest ? d : earliest)).slice(0, 10)
 })
 
-const dailyReturns = computed(() => {
+const dailySeries = computed(() => {
   historyTick.value // dependencia reactiva
-  return selectedId.value ? getDailyReturns(selectedId.value, 30) : { labels: [], values: [], pointCount: 0 }
+  return selectedId.value ? getDailySeries(selectedId.value, 90) : { labels: [], values: [], dates: [] }
 })
-const monthlyReturns = computed(() => {
+const monthlySeries = computed(() => {
   historyTick.value
-  return selectedId.value ? getMonthlyReturns(selectedId.value, 12) : { labels: [], values: [], pointCount: 0 }
+  return selectedId.value ? getMonthlySeries(selectedId.value, 24) : { labels: [], values: [], dates: [] }
 })
-const activeReturns = computed(() => (performanceView.value === 'DIARIO' ? dailyReturns.value : monthlyReturns.value))
-const hasEnoughHistory = computed(() => activeReturns.value.values.length > 0)
+const activeSeries = computed(() => (performanceView.value === 'DIARIO' ? dailySeries.value : monthlySeries.value))
+const hasEnoughHistory = computed(() => activeSeries.value.values.length > 0)
+// Rendimiento acumulado desde el primer punto de la serie activa hasta hoy,
+// para mostrar como dato de contexto (no reemplaza la curva de valor).
+const seriesReturnPct = computed(() => {
+  const vals = activeSeries.value.values
+  if (vals.length < 2 || !(vals[0] > 0)) return null
+  return ((vals[vals.length - 1] - vals[0]) / vals[0]) * 100
+})
 
 function renderPieChart() {
   if (!pieCanvas.value) return
@@ -538,10 +545,11 @@ function renderPieChart() {
 
 function renderLineChart() {
   if (!lineCanvas.value) return
-  const { labels, values } = activeReturns.value
+  const { labels, values } = activeSeries.value
   if (lineChart) lineChart.destroy()
   if (!values.length) return
-  const label = performanceView.value === 'DIARIO' ? 'Rendimiento diario (%)' : 'Rendimiento mensual (%)'
+  const base = values[0]
+  const label = performanceView.value === 'DIARIO' ? 'Valor de la cartera (ARS) — diario' : 'Valor de la cartera (ARS) — mensual'
   lineChart = new Chart(lineCanvas.value, {
     type: 'line',
     data: {
@@ -551,8 +559,8 @@ function renderLineChart() {
         data: values,
         borderColor: '#2563eb',
         backgroundColor: 'rgba(37, 99, 235, 0.15)',
-        pointBackgroundColor: values.map((v) => (v >= 0 ? '#22c55e' : '#ef4444')),
-        pointRadius: 3,
+        pointBackgroundColor: values.map((v) => (v >= base ? '#22c55e' : '#ef4444')),
+        pointRadius: values.length > 1 ? 3 : 5,
         tension: 0.25,
         fill: true,
       }],
@@ -563,20 +571,33 @@ function renderLineChart() {
       scales: {
         x: { ticks: { color: '#b0b4bc', font: { size: 11 } }, grid: { color: 'rgba(255,255,255,0.06)' } },
         y: {
-          ticks: { color: '#b0b4bc', font: { size: 11 }, callback: (v) => `${v}%` },
+          ticks: {
+            color: '#b0b4bc',
+            font: { size: 11 },
+            callback: (v) => `$${Number(v).toLocaleString('es-AR', { maximumFractionDigits: 0 })}`,
+          },
           grid: { color: 'rgba(255,255,255,0.06)' },
         },
       },
       plugins: {
         legend: { display: false },
-        tooltip: { callbacks: { label: (ctx) => `${ctx.parsed.y >= 0 ? '+' : ''}${ctx.parsed.y.toFixed(2)}%` } },
+        tooltip: {
+          callbacks: {
+            label: (ctx) => {
+              const v = ctx.parsed.y
+              const pct = base > 0 ? ((v - base) / base) * 100 : 0
+              const sign = pct >= 0 ? '+' : ''
+              return `$${v.toLocaleString('es-AR', { maximumFractionDigits: 0 })}  (${sign}${pct.toFixed(2)}% desde el inicio)`
+            },
+          },
+        },
       },
     },
   })
 }
 
 watch(breakdownByCompany, () => nextTick(renderPieChart), { deep: true })
-watch(activeReturns, () => nextTick(renderLineChart), { deep: true })
+watch(activeSeries, () => nextTick(renderLineChart), { deep: true })
 watch(performanceView, () => nextTick(renderLineChart))
 watch(totalValueARS, (val) => {
   if (val > 0) recordTodaySnapshot()
@@ -614,7 +635,7 @@ function onOverlayClick(e) {
         <div class="pf-title">
           <span class="pf-icon">🧩</span>
           Armado de Carteras
-          <span class="build-tag" title="Si este número no cambió después de un deploy nuevo, el navegador está sirviendo el JS viejo (caché) y hay que forzar una recarga.">build 2026-09-25.2</span>
+          <span class="build-tag" title="Si este número no cambió después de un deploy nuevo, el navegador está sirviendo el JS viejo (caché) y hay que forzar una recarga.">build 2026-09-26.1</span>
         </div>
         <button class="close-btn" @click="close" title="Cerrar">✕</button>
       </div>
@@ -794,7 +815,10 @@ function onOverlayClick(e) {
                   <div class="chart-card">
                     <div class="chart-card-header">
                       <div class="section-title">
-                        Rendimiento de la cartera
+                        Valor de la cartera desde el alta
+                        <span v-if="seriesReturnPct != null" class="series-return" :class="seriesReturnPct >= 0 ? 'pl-pos' : 'pl-neg'">
+                          {{ seriesReturnPct >= 0 ? '+' : '' }}{{ formatMoney(seriesReturnPct) }}%
+                        </span>
                       </div>
                       <div class="view-toggle">
                         <button
@@ -814,16 +838,7 @@ function onOverlayClick(e) {
                     <div class="chart-canvas-wrap">
                       <canvas v-show="hasEnoughHistory" ref="lineCanvas"></canvas>
                       <div v-if="!hasEnoughHistory" class="empty-state-small chart-empty">
-                        <template v-if="performanceView === 'DIARIO'">
-                          Todavía no hay dos días distintos registrados para esta cartera. Si la diste de alta hace
-                          poco, necesita al menos un día más de diferencia entre el costo al alta
-                          ({{ formatDateShort(inceptionDate) }}) y hoy. Si ya pasaron días y sigue sin aparecer,
-                          hacé clic en "Ver datos del historial guardado" más abajo y pasámelo.
-                        </template>
-                        <template v-else>
-                          El rendimiento mensual necesita al menos dos meses calendario distintos con datos. Si la
-                          cartera es de este mes, va a mostrarse a partir del mes que viene.
-                        </template>
+                        Grabando el primer punto del historial (costo al alta: {{ formatDateShort(inceptionDate) }})... esto tarda un instante.
                       </div>
                     </div>
                     <button type="button" class="debug-toggle" @click="showDebug = !showDebug">
@@ -1314,6 +1329,12 @@ function onOverlayClick(e) {
 .view-toggle {
   display: flex;
   gap: 6px;
+}
+
+.series-return {
+  margin-left: 8px;
+  font-size: 13px;
+  font-weight: 700;
 }
 
 .chart-canvas-wrap {
