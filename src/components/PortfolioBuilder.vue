@@ -243,6 +243,42 @@ async function removePositionRow(pos) {
 const importing = ref(false)
 const importResult = ref(null)
 
+// =========================================================
+// CORREGIR SECTORES YA CARGADOS: para posiciones que quedaron en "General"
+// (por ejemplo, las que ya importaste antes de este fix), busca el sector
+// real en el catálogo por ticker y lo actualiza. No toca posiciones cuyo
+// sector ya fue cambiado a mano a otra cosa distinta de "General".
+const fixingSectors = ref(false)
+const fixSectorsResult = ref(null)
+
+async function fixSectorsFromCatalog() {
+  if (!selectedId.value) return
+  fixingSectors.value = true
+  errorMsg.value = ''
+  fixSectorsResult.value = null
+  try {
+    let fixed = 0
+    let noMatch = 0
+    for (const p of positions.value) {
+      if (p.sector !== 'General') continue
+      const catalogSector = PORTFOLIO_ASSET_BY_TICKER[p.ticker]?.sector
+      if (!catalogSector) {
+        noMatch++
+        continue
+      }
+      const updatedPos = await updatePosition(p.id, { sector: catalogSector })
+      const idx = positions.value.findIndex((pos) => pos.id === p.id)
+      if (idx !== -1) positions.value[idx] = updatedPos
+      fixed++
+    }
+    fixSectorsResult.value = { fixed, noMatch }
+  } catch (e) {
+    errorMsg.value = e.message
+  } finally {
+    fixingSectors.value = false
+  }
+}
+
 async function importFromTrades() {
   if (!selectedId.value || !selectedPortfolio.value) return
   const ok = window.confirm(
@@ -824,7 +860,7 @@ function onOverlayClick(e) {
         <div class="pf-title">
           <span class="pf-icon">🧩</span>
           Armado de Carteras
-          <span class="build-tag" title="Si este número no cambió después de un deploy nuevo, el navegador está sirviendo el JS viejo (caché) y hay que forzar una recarga.">build 2026-09-26.5</span>
+          <span class="build-tag" title="Si este número no cambió después de un deploy nuevo, el navegador está sirviendo el JS viejo (caché) y hay que forzar una recarga.">build 2026-09-26.6</span>
         </div>
         <button class="close-btn" @click="close" title="Cerrar">✕</button>
       </div>
@@ -961,6 +997,13 @@ function onOverlayClick(e) {
                     <template v-if="importResult.updated"> · {{ importResult.updated }} actualizada(s)</template>
                     <template v-if="importResult.removed"> · {{ importResult.removed }} borrada(s) (vendidas del todo)</template>
                     <template v-if="importResult.skippedClosed"> · {{ importResult.skippedClosed }} sin tenencia neta</template>
+                  </span>
+                  <button type="button" class="btn-secondary btn-small" :disabled="fixingSectors" @click="fixSectorsFromCatalog">
+                    {{ fixingSectors ? 'Corrigiendo...' : '🔧 Corregir sectores desde catálogo' }}
+                  </button>
+                  <span v-if="fixSectorsResult" class="import-result-text">
+                    {{ fixSectorsResult.fixed }} corregida(s)
+                    <template v-if="fixSectorsResult.noMatch"> · {{ fixSectorsResult.noMatch }} sin match en el catálogo</template>
                   </span>
                 </div>
 
