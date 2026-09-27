@@ -74,6 +74,7 @@ async function loadPositions() {
 
 async function selectPortfolio(id) {
   selectedId.value = id
+  selectedTicker.value = null
   await loadPositions()
   recordTodaySnapshot()
 }
@@ -450,37 +451,71 @@ const diversificationVerdict = computed(() => {
 })
 
 // =========================================================
-// GRÁFICOS: torta de ponderación por papel + línea de rendimiento
+// GRÁFICOS: evolución por papel (clic en "Por empresa") + línea general
 // =========================================================
-const pieCanvas = ref(null)
+const positionCanvas = ref(null)
 const lineCanvas = ref(null)
-let pieChart = null
+let positionChart = null
 let lineChart = null
 
-const performanceView = ref('DIARIO') // 'DIARIO' | 'MENSUAL'
+const performanceView = ref('DIARIO') // 'DIARIO' | 'MENSUAL', comparte ambos gráficos
 const historyTick = ref(0) // se incrementa cada vez que grabamos un snapshot, para recalcular las series
 const showDebug = ref(false)
+const selectedTicker = ref(null) // ticker elegido en "Por empresa" para el gráfico de evolución
+
+function positionHistoryKey(ticker) {
+  return `pos:${selectedId.value}:${ticker}`
+}
+
+function positionsForTicker(ticker) {
+  return positionsComputed.value.filter((p) => p.ticker === ticker)
+}
+
+function tickerInceptionDate(ticker) {
+  const dates = positionsForTicker(ticker).map((p) => p.createdAt).filter(Boolean)
+  if (!dates.length) return null
+  return dates.reduce((earliest, d) => (d < earliest ? d : earliest)).slice(0, 10)
+}
 
 const debugInfo = computed(() => {
   historyTick.value
   if (!selectedId.value) return ''
   let rawHistory = null
   try { rawHistory = localStorage.getItem('pf-history:' + selectedId.value) } catch { rawHistory = '(error leyendo localStorage)' }
+  let rawPosition = null
+  if (selectedTicker.value) {
+    try { rawPosition = localStorage.getItem('pf-history:' + positionHistoryKey(selectedTicker.value)) } catch { rawPosition = '(error leyendo localStorage)' }
+  }
   return JSON.stringify({
     portfolioId: selectedId.value,
     inceptionDate: inceptionDate.value,
     totalValueARS: totalValueARS.value,
     totalInvestedARS: totalInvestedARS.value,
     history: rawHistory ? JSON.parse(rawHistory) : null,
+    selectedTicker: selectedTicker.value,
+    tickerHistory: rawPosition ? JSON.parse(rawPosition) : null,
   }, null, 2)
 })
 
-// Grabar el snapshot de hoy con el valor total de la cartera, para ir
-// armando el historial real de rendimiento con el uso diario de la app.
+// Grabar el snapshot de hoy: el total de la cartera Y, por separado, el
+// valor de cada papel (agrupado por ticker, por si hay más de una posición
+// del mismo ticker), para poder graficar la evolución individual de cada
+// uno con la misma lógica que el gráfico general.
 function recordTodaySnapshot() {
-  if (!selectedId.value || !(totalValueARS.value > 0)) return
-  seedFromInception(selectedId.value, inceptionDate.value, totalInvestedARS.value)
-  recordSnapshot(selectedId.value, totalValueARS.value)
+  if (!selectedId.value) return
+  if (totalValueARS.value > 0) {
+    seedFromInception(selectedId.value, inceptionDate.value, totalInvestedARS.value)
+    recordSnapshot(selectedId.value, totalValueARS.value)
+  }
+  const tickers = [...new Set(positionsComputed.value.map((p) => p.ticker))]
+  for (const ticker of tickers) {
+    const rows = positionsForTicker(ticker)
+    const invested = rows.reduce((acc, p) => acc + p.invested, 0)
+    const current = rows.reduce((acc, p) => acc + (p.marketValueARS ?? p.invested), 0)
+    const key = positionHistoryKey(ticker)
+    if (invested > 0) seedFromInception(key, tickerInceptionDate(ticker), invested)
+    if (current > 0) recordSnapshot(key, current)
+  }
   historyTick.value++
 }
 
@@ -512,35 +547,24 @@ const seriesReturnPct = computed(() => {
   return ((vals[vals.length - 1] - vals[0]) / vals[0]) * 100
 })
 
-function renderPieChart() {
-  if (!pieCanvas.value) return
-  const data = breakdownByCompany.value
-  if (pieChart) pieChart.destroy()
-  if (!data.length) return
-  pieChart = new Chart(pieCanvas.value, {
-    type: 'pie',
-    data: {
-      labels: data.map((d) => d.label),
-      datasets: [{
-        data: data.map((d) => d.pct),
-        backgroundColor: data.map((d) => sectorColor(d.sector)),
-        borderColor: 'rgba(0,0,0,0.25)',
-        borderWidth: 1,
-      }],
-    },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      plugins: {
-        legend: { position: 'right', labels: { color: '#b0b4bc', boxWidth: 12, font: { size: 11 } } },
-        tooltip: {
-          callbacks: {
-            label: (ctx) => `${ctx.label}: ${ctx.parsed.toFixed(2)}%`,
-          },
-        },
-      },
-    },
-  })
+// Serie de evolución del papel seleccionado en "Por empresa", con la misma
+// mecánica (diario/mensual) que el gráfico general de la cartera.
+const positionSeries = computed(() => {
+  historyTick.value
+  if (!selectedId.value || !selectedTicker.value) return { labels: [], values: [], dates: [] }
+  const key = positionHistoryKey(selectedTicker.value)
+  return performanceView.value === 'DIARIO' ? getDailySeries(key, 90) : getMonthlySeries(key, 24)
+})
+const hasPositionHistory = computed(() => positionSeries.value.values.length > 0)
+const positionReturnPct = computed(() => {
+  const vals = positionSeries.value.values
+  if (vals.length < 2 || !(vals[0] > 0)) return null
+  return ((vals[vals.length - 1] - vals[0]) / vals[0]) * 100
+})
+
+function selectTickerForChart(ticker) {
+  selectedTicker.value = ticker
+  nextTick(renderPositionChart)
 }
 
 function renderLineChart() {
@@ -596,9 +620,72 @@ function renderLineChart() {
   })
 }
 
-watch(breakdownByCompany, () => nextTick(renderPieChart), { deep: true })
+function renderPositionChart() {
+  if (!positionCanvas.value) return
+  const { labels, values } = positionSeries.value
+  if (positionChart) positionChart.destroy()
+  if (!values.length) return
+  const base = values[0]
+  const color = selectedTicker.value ? sectorColor(PORTFOLIO_ASSET_BY_TICKER[selectedTicker.value]?.sector) : '#2563eb'
+  positionChart = new Chart(positionCanvas.value, {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [{
+        label: `Valor de ${selectedTicker.value} (ARS)`,
+        data: values,
+        borderColor: color,
+        backgroundColor: color + '26',
+        pointBackgroundColor: values.map((v) => (v >= base ? '#22c55e' : '#ef4444')),
+        pointRadius: values.length > 1 ? 3 : 5,
+        tension: 0.25,
+        fill: true,
+      }],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      scales: {
+        x: { ticks: { color: '#b0b4bc', font: { size: 11 } }, grid: { color: 'rgba(255,255,255,0.06)' } },
+        y: {
+          ticks: {
+            color: '#b0b4bc',
+            font: { size: 11 },
+            callback: (v) => `$${Number(v).toLocaleString('es-AR', { maximumFractionDigits: 0 })}`,
+          },
+          grid: { color: 'rgba(255,255,255,0.06)' },
+        },
+      },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            label: (ctx) => {
+              const v = ctx.parsed.y
+              const pct = base > 0 ? ((v - base) / base) * 100 : 0
+              const sign = pct >= 0 ? '+' : ''
+              return `$${v.toLocaleString('es-AR', { maximumFractionDigits: 0 })}  (${sign}${pct.toFixed(2)}% desde el alta)`
+            },
+          },
+        },
+      },
+    },
+  })
+}
+
+watch(breakdownByCompany, () => {
+  // si todavía no eligieron un papel, mostramos por defecto el de mayor peso
+  if (!selectedTicker.value && breakdownByCompany.value.length) {
+    selectedTicker.value = breakdownByCompany.value[0].label
+  }
+  nextTick(renderPositionChart)
+}, { deep: true, immediate: true })
+watch(positionSeries, () => nextTick(renderPositionChart), { deep: true })
 watch(activeSeries, () => nextTick(renderLineChart), { deep: true })
-watch(performanceView, () => nextTick(renderLineChart))
+watch(performanceView, () => {
+  nextTick(renderLineChart)
+  nextTick(renderPositionChart)
+})
 watch(totalValueARS, (val) => {
   if (val > 0) recordTodaySnapshot()
 })
@@ -608,14 +695,14 @@ onMounted(async () => {
   await loadPositions()
   recordTodaySnapshot()
   await nextTick()
-  renderPieChart()
+  renderPositionChart()
   renderLineChart()
   refreshTimer = setInterval(refreshLivePrices, REFRESH_MS)
 })
 
 onUnmounted(() => {
   if (refreshTimer) clearInterval(refreshTimer)
-  if (pieChart) pieChart.destroy()
+  if (positionChart) positionChart.destroy()
   if (lineChart) lineChart.destroy()
 })
 
@@ -635,7 +722,7 @@ function onOverlayClick(e) {
         <div class="pf-title">
           <span class="pf-icon">🧩</span>
           Armado de Carteras
-          <span class="build-tag" title="Si este número no cambió después de un deploy nuevo, el navegador está sirviendo el JS viejo (caché) y hay que forzar una recarga.">build 2026-09-26.1</span>
+          <span class="build-tag" title="Si este número no cambió después de un deploy nuevo, el navegador está sirviendo el JS viejo (caché) y hay que forzar una recarga.">build 2026-09-26.2</span>
         </div>
         <button class="close-btn" @click="close" title="Cerrar">✕</button>
       </div>
@@ -791,25 +878,43 @@ function onOverlayClick(e) {
                     </div>
                   </div>
                   <div class="diversification-col">
-                    <div class="section-title">Por empresa</div>
-                    <div v-for="b in breakdownByCompany" :key="b.label" class="bar-row">
+                    <div class="section-title">Por empresa <span class="hint-inline">(clic para ver su evolución)</span></div>
+                    <button
+                      v-for="b in breakdownByCompany"
+                      :key="b.label"
+                      type="button"
+                      class="bar-row bar-row-clickable"
+                      :class="{ active: selectedTicker === b.label }"
+                      @click="selectTickerForChart(b.label)"
+                    >
                       <span class="bar-label" :title="b.sector">{{ b.label }}</span>
                       <div class="bar-track">
                         <div class="bar-fill" :style="{ width: b.pct + '%', backgroundColor: sectorColor(b.sector) }"></div>
                       </div>
                       <span class="bar-pct">{{ formatMoney(b.pct) }}%</span>
-                    </div>
+                    </button>
                   </div>
                 </div>
 
-                <!-- Gráficos: torta de ponderación + línea de rendimiento -->
+                <!-- Gráficos: evolución del papel elegido + línea de la cartera -->
                 <div v-if="positions.length" class="charts-section">
                   <div class="chart-card">
                     <div class="chart-card-header">
-                      <div class="section-title">Ponderación por papel</div>
+                      <div class="section-title">
+                        {{ selectedTicker ? `Evolución de ${selectedTicker}` : 'Evolución por papel' }}
+                        <span v-if="positionReturnPct != null" class="series-return" :class="positionReturnPct >= 0 ? 'pl-pos' : 'pl-neg'">
+                          {{ positionReturnPct >= 0 ? '+' : '' }}{{ formatMoney(positionReturnPct) }}%
+                        </span>
+                      </div>
                     </div>
                     <div class="chart-canvas-wrap">
-                      <canvas ref="pieCanvas"></canvas>
+                      <canvas v-show="hasPositionHistory" ref="positionCanvas"></canvas>
+                      <div v-if="!hasPositionHistory" class="empty-state-small chart-empty">
+                        <template v-if="selectedTicker">
+                          Grabando el historial de {{ selectedTicker }} (costo al alta: {{ formatDateShort(tickerInceptionDate(selectedTicker)) }})... esperá un instante.
+                        </template>
+                        <template v-else>Elegí un papel en "Por empresa" para ver su evolución.</template>
+                      </div>
                     </div>
                   </div>
                   <div class="chart-card">
@@ -1393,6 +1498,37 @@ function onOverlayClick(e) {
   align-items: center;
   gap: 10px;
   font-size: 12.5px;
+}
+
+.bar-row-clickable {
+  width: 100%;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  padding: 3px 6px;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.bar-row-clickable:hover {
+  background: var(--panel);
+}
+
+.bar-row-clickable.active {
+  border-color: var(--blue, #2563eb);
+  background: rgba(37, 99, 235, 0.1);
+}
+
+.bar-row-clickable .bar-label {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.hint-inline {
+  font-size: 10.5px;
+  font-weight: 500;
+  color: var(--text-dim);
+  text-transform: none;
 }
 
 .bar-label {
