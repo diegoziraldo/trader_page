@@ -309,12 +309,17 @@ async function importFromTrades() {
       }
 
       const earliestBuyDate = data.buys.reduce((min, b) => (b.date < min ? b.date : min), data.buys[0].date)
+      // "Mis Trades" no guarda sector, pero si el ticker está en nuestro
+      // catálogo (src/data/argentinePortfolioAssets.js) lo tomamos de ahí
+      // en vez de dejarlo en "General".
+      const catalogSector = PORTFOLIO_ASSET_BY_TICKER[ticker]?.sector
       const createdPos = await createPosition(selectedId.value, {
         assetType: data.assetType,
         ticker,
         quantity: data.netQty,
         avgPrice,
         createdAt: earliestBuyDate,
+        sector: catalogSector,
       })
       positions.value.push(createdPos)
       created++
@@ -819,7 +824,7 @@ function onOverlayClick(e) {
         <div class="pf-title">
           <span class="pf-icon">🧩</span>
           Armado de Carteras
-          <span class="build-tag" title="Si este número no cambió después de un deploy nuevo, el navegador está sirviendo el JS viejo (caché) y hay que forzar una recarga.">build 2026-09-26.4</span>
+          <span class="build-tag" title="Si este número no cambió después de un deploy nuevo, el navegador está sirviendo el JS viejo (caché) y hay que forzar una recarga.">build 2026-09-26.5</span>
         </div>
         <button class="close-btn" @click="close" title="Cerrar">✕</button>
       </div>
