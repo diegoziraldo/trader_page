@@ -246,9 +246,10 @@ const importResult = ref(null)
 async function importFromTrades() {
   if (!selectedId.value || !selectedPortfolio.value) return
   const ok = window.confirm(
-    `Esto va a leer todos tus trades de "Mis Trades" y crear una posición por cada ticker con tenencia neta ` +
-    `positiva en la cartera "${selectedPortfolio.value.name}", con la fecha de tu primera compra de ese ticker. ` +
-    `Los tickers que ya tengan una posición cargada en esta cartera se saltean (no se duplican). ¿Continuar?`
+    `Esto va a sincronizar la cartera "${selectedPortfolio.value.name}" con "Mis Trades": crea una posición ` +
+    `nueva por cada ticker que todavía no tenga (con la fecha de tu primera compra), actualiza cantidad/precio ` +
+    `promedio si compraste o vendiste algo más, y BORRA la posición si vendiste el ticker por completo (tenencia ` +
+    `neta cero). ¿Continuar?`
   )
   if (!ok) return
 
@@ -272,40 +273,56 @@ async function importFromTrades() {
       }
     }
 
-    const existingTickers = new Set(positions.value.map((p) => p.ticker))
-    let imported = 0
-    let skippedExisting = 0
+    const existingByTicker = new Map(positions.value.map((p) => [p.ticker, p]))
+    let created = 0
+    let updated = 0
+    let removed = 0
     let skippedClosed = 0
 
     for (const [ticker, data] of Object.entries(byTicker)) {
-      if (existingTickers.has(ticker)) {
-        skippedExisting++
+      const existing = existingByTicker.get(ticker)
+      const totalCost = data.buys.reduce((acc, b) => acc + b.qty * b.price, 0)
+      const totalQtyBought = data.buys.reduce((acc, b) => acc + b.qty, 0)
+      const avgPrice = totalQtyBought > 0 ? totalCost / totalQtyBought : null
+
+      if (existing) {
+        if (data.netQty > 0) {
+          // Ya existía: actualizamos cantidad/precio (mantiene su fecha de alta original).
+          const payload = { quantity: data.netQty }
+          if (avgPrice != null) payload.avgPrice = avgPrice
+          const updatedPos = await updatePosition(existing.id, payload)
+          const idx = positions.value.findIndex((p) => p.id === existing.id)
+          if (idx !== -1) positions.value[idx] = updatedPos
+          updated++
+        } else {
+          // Vendida por completo: se borra la posición de la cartera.
+          await deletePosition(existing.id)
+          positions.value = positions.value.filter((p) => p.id !== existing.id)
+          removed++
+        }
         continue
       }
+
       if (!(data.netQty > 0) || !data.buys.length) {
         skippedClosed++
         continue
       }
 
-      const totalCost = data.buys.reduce((acc, b) => acc + b.qty * b.price, 0)
-      const totalQtyBought = data.buys.reduce((acc, b) => acc + b.qty, 0)
-      const avgPrice = totalQtyBought > 0 ? totalCost / totalQtyBought : 0
       const earliestBuyDate = data.buys.reduce((min, b) => (b.date < min ? b.date : min), data.buys[0].date)
-
-      const created = await createPosition(selectedId.value, {
+      const createdPos = await createPosition(selectedId.value, {
         assetType: data.assetType,
         ticker,
         quantity: data.netQty,
         avgPrice,
         createdAt: earliestBuyDate,
       })
-      positions.value.push(created)
-      imported++
+      positions.value.push(createdPos)
+      created++
     }
 
     await refreshLivePrices()
     recordTodaySnapshot()
-    importResult.value = { imported, skippedExisting, skippedClosed }
+    importResult.value = { created, updated, removed, skippedClosed }
   } catch (e) {
     errorMsg.value = e.message
   } finally {
@@ -802,7 +819,7 @@ function onOverlayClick(e) {
         <div class="pf-title">
           <span class="pf-icon">🧩</span>
           Armado de Carteras
-          <span class="build-tag" title="Si este número no cambió después de un deploy nuevo, el navegador está sirviendo el JS viejo (caché) y hay que forzar una recarga.">build 2026-09-26.3</span>
+          <span class="build-tag" title="Si este número no cambió después de un deploy nuevo, el navegador está sirviendo el JS viejo (caché) y hay que forzar una recarga.">build 2026-09-26.4</span>
         </div>
         <button class="close-btn" @click="close" title="Cerrar">✕</button>
       </div>
@@ -929,15 +946,16 @@ function onOverlayClick(e) {
                   costo promedio, así que el peso, el valor total y el rendimiento pueden no reflejar el precio real de mercado.
                 </div>
 
-                <!-- Importar desde Mis Trades -->
+                <!-- Importar / sincronizar con Mis Trades -->
                 <div class="import-trades-bar">
                   <button type="button" class="btn-secondary btn-small" :disabled="importing" @click="importFromTrades">
-                    {{ importing ? 'Importando...' : '📥 Importar desde Mis Trades' }}
+                    {{ importing ? 'Sincronizando...' : '🔄 Sincronizar con Mis Trades' }}
                   </button>
                   <span v-if="importResult" class="import-result-text">
-                    {{ importResult.imported }} posición(es) creada(s)
-                    <template v-if="importResult.skippedExisting"> · {{ importResult.skippedExisting }} ya existían</template>
-                    <template v-if="importResult.skippedClosed"> · {{ importResult.skippedClosed }} sin tenencia neta (vendidas del todo)</template>
+                    {{ importResult.created }} nueva(s)
+                    <template v-if="importResult.updated"> · {{ importResult.updated }} actualizada(s)</template>
+                    <template v-if="importResult.removed"> · {{ importResult.removed }} borrada(s) (vendidas del todo)</template>
+                    <template v-if="importResult.skippedClosed"> · {{ importResult.skippedClosed }} sin tenencia neta</template>
                   </span>
                 </div>
 
