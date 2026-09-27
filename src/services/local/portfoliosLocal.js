@@ -167,7 +167,7 @@ export async function createPosition(portfolioId, body) {
       body.manualPrice !== undefined && body.manualPrice !== null && body.manualPrice !== ''
         ? Number(body.manualPrice)
         : null,
-    created_at: now,
+    created_at: body.createdAt ? String(body.createdAt) : now,
     updated_at: now,
   }
 

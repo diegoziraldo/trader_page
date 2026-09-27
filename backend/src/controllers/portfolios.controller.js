@@ -144,12 +144,16 @@ function createPosition(req, res) {
     req.body.manualPrice !== undefined && req.body.manualPrice !== null && req.body.manualPrice !== ''
       ? Number(req.body.manualPrice)
       : null;
+  // createdAt opcional: permite importar posiciones con la fecha real de
+  // compra (ej. desde "Mis Trades") en vez de la fecha de alta en el
+  // sistema, para que el gráfico de evolución arranque desde esa fecha.
+  const createdAtOverride = req.body.createdAt ? String(req.body.createdAt) : null;
 
   const info = db
     .prepare(
       `INSERT INTO portfolio_positions
-        (portfolio_id, asset_type, ticker, underlying_ticker, ratio, sector, quantity, avg_price, target_weight, manual_price)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        (portfolio_id, asset_type, ticker, underlying_ticker, ratio, sector, quantity, avg_price, target_weight, manual_price, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, datetime('now')), datetime('now'))`
     )
     .run(
       req.params.id,
@@ -161,7 +165,8 @@ function createPosition(req, res) {
       Number(req.body.quantity),
       Number(req.body.avgPrice),
       targetWeight,
-      manualPrice
+      manualPrice,
+      createdAtOverride
     );
 
   const created = db.prepare('SELECT * FROM portfolio_positions WHERE id = ?').get(info.lastInsertRowid);

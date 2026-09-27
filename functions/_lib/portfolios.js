@@ -146,12 +146,16 @@ export async function createPosition(db, portfolioId, body) {
     body.manualPrice !== undefined && body.manualPrice !== null && body.manualPrice !== ''
       ? Number(body.manualPrice)
       : null;
+  // createdAt opcional: permite importar posiciones con la fecha real de
+  // compra (ej. desde "Mis Trades") en vez de la fecha de alta en el
+  // sistema, para que el gráfico de evolución arranque desde esa fecha.
+  const createdAtOverride = body.createdAt ? String(body.createdAt) : null;
 
   const info = await db
     .prepare(
       `INSERT INTO portfolio_positions
-        (portfolio_id, asset_type, ticker, underlying_ticker, ratio, sector, quantity, avg_price, target_weight, manual_price)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        (portfolio_id, asset_type, ticker, underlying_ticker, ratio, sector, quantity, avg_price, target_weight, manual_price, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, datetime('now')), datetime('now'))`
     )
     .bind(
       portfolioId,
@@ -163,7 +167,8 @@ export async function createPosition(db, portfolioId, body) {
       Number(body.quantity),
       Number(body.avgPrice),
       targetWeight,
-      manualPrice
+      manualPrice,
+      createdAtOverride
     )
     .run();
 

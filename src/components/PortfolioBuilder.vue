@@ -15,6 +15,7 @@ import { useDolar } from '../composables/useDolar'
 import { PORTFOLIO_ASSET_BY_TICKER } from '../data/argentinePortfolioAssets'
 import { recordSnapshot, seedFromInception, getDailySeries, getMonthlySeries } from '../services/local/portfolioHistoryLocal'
 import Chart from 'chart.js/auto'
+import { getTrades } from '../services/tradesService'
 
 const emit = defineEmits(['close'])
 
@@ -230,6 +231,85 @@ async function removePositionRow(pos) {
     if (editingPositionId.value === pos.id) cancelEditPosition()
   } catch (e) {
     errorMsg.value = e.message
+  }
+}
+
+// =========================================================
+// IMPORTAR DESDE "MIS TRADES": arma una posición por cada ticker con
+// tenencia neta positiva (COMPRAs - VENTAs > 0), usando la fecha de la
+// compra MÁS ANTIGUA de ese ticker como fecha de alta de la posición (así
+// el gráfico de evolución arranca desde ahí, no desde hoy) y el costo
+// promedio ponderado de las compras como precio promedio.
+const importing = ref(false)
+const importResult = ref(null)
+
+async function importFromTrades() {
+  if (!selectedId.value || !selectedPortfolio.value) return
+  const ok = window.confirm(
+    `Esto va a leer todos tus trades de "Mis Trades" y crear una posición por cada ticker con tenencia neta ` +
+    `positiva en la cartera "${selectedPortfolio.value.name}", con la fecha de tu primera compra de ese ticker. ` +
+    `Los tickers que ya tengan una posición cargada en esta cartera se saltean (no se duplican). ¿Continuar?`
+  )
+  if (!ok) return
+
+  importing.value = true
+  errorMsg.value = ''
+  importResult.value = null
+  try {
+    const trades = await getTrades()
+
+    // Agrupar por ticker: tenencia neta, y lista de compras (fecha, cantidad, precio).
+    const byTicker = {}
+    for (const t of trades) {
+      if (!byTicker[t.ticker]) byTicker[t.ticker] = { assetType: t.assetType, buys: [], netQty: 0 }
+      const entry = byTicker[t.ticker]
+      const qty = Number(t.quantity)
+      if (t.operation === 'COMPRA') {
+        entry.buys.push({ date: t.date, qty, price: Number(t.price) })
+        entry.netQty += qty
+      } else {
+        entry.netQty -= qty
+      }
+    }
+
+    const existingTickers = new Set(positions.value.map((p) => p.ticker))
+    let imported = 0
+    let skippedExisting = 0
+    let skippedClosed = 0
+
+    for (const [ticker, data] of Object.entries(byTicker)) {
+      if (existingTickers.has(ticker)) {
+        skippedExisting++
+        continue
+      }
+      if (!(data.netQty > 0) || !data.buys.length) {
+        skippedClosed++
+        continue
+      }
+
+      const totalCost = data.buys.reduce((acc, b) => acc + b.qty * b.price, 0)
+      const totalQtyBought = data.buys.reduce((acc, b) => acc + b.qty, 0)
+      const avgPrice = totalQtyBought > 0 ? totalCost / totalQtyBought : 0
+      const earliestBuyDate = data.buys.reduce((min, b) => (b.date < min ? b.date : min), data.buys[0].date)
+
+      const created = await createPosition(selectedId.value, {
+        assetType: data.assetType,
+        ticker,
+        quantity: data.netQty,
+        avgPrice,
+        createdAt: earliestBuyDate,
+      })
+      positions.value.push(created)
+      imported++
+    }
+
+    await refreshLivePrices()
+    recordTodaySnapshot()
+    importResult.value = { imported, skippedExisting, skippedClosed }
+  } catch (e) {
+    errorMsg.value = e.message
+  } finally {
+    importing.value = false
   }
 }
 
@@ -722,7 +802,7 @@ function onOverlayClick(e) {
         <div class="pf-title">
           <span class="pf-icon">🧩</span>
           Armado de Carteras
-          <span class="build-tag" title="Si este número no cambió después de un deploy nuevo, el navegador está sirviendo el JS viejo (caché) y hay que forzar una recarga.">build 2026-09-26.2</span>
+          <span class="build-tag" title="Si este número no cambió después de un deploy nuevo, el navegador está sirviendo el JS viejo (caché) y hay que forzar una recarga.">build 2026-09-26.3</span>
         </div>
         <button class="close-btn" @click="close" title="Cerrar">✕</button>
       </div>
@@ -847,6 +927,18 @@ function onOverlayClick(e) {
                 <div v-if="!allPricesKnown && positions.length" class="pf-hint">
                   ⚠️ Algunas posiciones no tienen precio en vivo ni precio manual cargado: se están valuando por su
                   costo promedio, así que el peso, el valor total y el rendimiento pueden no reflejar el precio real de mercado.
+                </div>
+
+                <!-- Importar desde Mis Trades -->
+                <div class="import-trades-bar">
+                  <button type="button" class="btn-secondary btn-small" :disabled="importing" @click="importFromTrades">
+                    {{ importing ? 'Importando...' : '📥 Importar desde Mis Trades' }}
+                  </button>
+                  <span v-if="importResult" class="import-result-text">
+                    {{ importResult.imported }} posición(es) creada(s)
+                    <template v-if="importResult.skippedExisting"> · {{ importResult.skippedExisting }} ya existían</template>
+                    <template v-if="importResult.skippedClosed"> · {{ importResult.skippedClosed }} sin tenencia neta (vendidas del todo)</template>
+                  </span>
                 </div>
 
                 <!-- Diversificación -->
@@ -1638,6 +1730,18 @@ function onOverlayClick(e) {
   padding: 8px 14px;
   font-size: 13px;
   white-space: nowrap;
+}
+
+.import-trades-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.import-result-text {
+  font-size: 12.5px;
+  color: var(--text-dim);
 }
 
 .btn-secondary {
