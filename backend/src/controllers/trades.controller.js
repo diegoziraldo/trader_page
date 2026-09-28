@@ -12,6 +12,8 @@ function formatTrade(row) {
     fee: row.fee,
     notes: row.notes,
     ccl: row.ccl,
+    sector: row.sector || 'General',
+    portfolioId: row.portfolio_id ?? null,
     // Precio de esta operación puntual, convertido a USD con el CCL que
     // estaba vigente ese día (si se cargó).
     priceUSD: row.ccl ? Math.round((row.price / row.ccl) * 10000) / 10000 : null,
@@ -41,8 +43,19 @@ function validateBody(body) {
   return errors;
 }
 
+// Normaliza el portfolioId recibido: vacío/null => sin cartera; si viene un
+// id, verifica que la cartera exista. Devuelve { value } o { error }.
+function resolvePortfolioId(raw) {
+  if (raw === undefined || raw === null || raw === '') return { value: null };
+  const id = Number(raw);
+  if (!Number.isInteger(id) || id <= 0) return { error: 'portfolioId inválido' };
+  const exists = db.prepare('SELECT id FROM portfolios WHERE id = ?').get(id);
+  if (!exists) return { error: 'La cartera indicada no existe' };
+  return { value: id };
+}
+
 // POST /api/trades
-// { date, assetType, ticker, operation, quantity, price, fee?, notes?, ccl? }
+// { date, assetType, ticker, operation, quantity, price, fee?, notes?, ccl?, sector?, portfolioId? }
 function create(req, res) {
   const errors = validateBody(req.body);
   if (errors.length) return res.status(400).json({ error: errors.join(', ') });
@@ -53,13 +66,16 @@ function create(req, res) {
   const price = Number(req.body.price);
   const fee = Number(req.body.fee) || 0;
   const ccl = req.body.ccl != null && req.body.ccl !== '' ? Number(req.body.ccl) : null;
+  const sector = (req.body.sector && String(req.body.sector).trim()) || 'General';
+  const portfolio = resolvePortfolioId(req.body.portfolioId);
+  if (portfolio.error) return res.status(400).json({ error: portfolio.error });
 
   const info = db
     .prepare(
-      `INSERT INTO trades (trade_date, asset_type, ticker, operation, quantity, price, fee, notes, ccl)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO trades (trade_date, asset_type, ticker, operation, quantity, price, fee, notes, ccl, sector, portfolio_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
-    .run(date, assetType, ticker, operation, quantity, price, fee, notes, ccl);
+    .run(date, assetType, ticker, operation, quantity, price, fee, notes, ccl, sector, portfolio.value);
 
   const created = db.prepare('SELECT * FROM trades WHERE id = ?').get(info.lastInsertRowid);
   res.status(201).json(formatTrade(created));
@@ -86,11 +102,21 @@ function update(req, res) {
   const ccl = req.body.ccl !== undefined
     ? (req.body.ccl === '' || req.body.ccl === null ? null : Number(req.body.ccl))
     : existing.ccl;
+  const sector = req.body.sector !== undefined
+    ? (String(req.body.sector).trim() || 'General')
+    : (existing.sector || 'General');
+  let portfolioId = existing.portfolio_id ?? null;
+  if (req.body.portfolioId !== undefined) {
+    const portfolio = resolvePortfolioId(req.body.portfolioId);
+    if (portfolio.error) return res.status(400).json({ error: portfolio.error });
+    portfolioId = portfolio.value;
+  }
 
   db.prepare(
     `UPDATE trades SET
       trade_date = ?, asset_type = ?, ticker = ?, operation = ?,
-      quantity = ?, price = ?, fee = ?, notes = ?, ccl = ?, updated_at = datetime('now')
+      quantity = ?, price = ?, fee = ?, notes = ?, ccl = ?, sector = ?, portfolio_id = ?,
+      updated_at = datetime('now')
      WHERE id = ?`
   ).run(
     merged.date,
@@ -102,6 +128,8 @@ function update(req, res) {
     fee,
     notes,
     ccl,
+    sector,
+    portfolioId,
     req.params.id
   );
 

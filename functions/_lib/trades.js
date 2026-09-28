@@ -10,6 +10,8 @@ function formatTrade(row) {
     fee: row.fee,
     notes: row.notes,
     ccl: row.ccl,
+    sector: row.sector || 'General',
+    portfolioId: row.portfolio_id ?? null,
     priceUSD: row.ccl ? Math.round((row.price / row.ccl) * 10000) / 10000 : null,
     total:
       row.operation === 'COMPRA'
@@ -35,6 +37,17 @@ export async function getAll(db) {
   return results.map(formatTrade);
 }
 
+// Normaliza el portfolioId recibido: vacío/null => sin cartera; si viene un
+// id, verifica que la cartera exista. Devuelve el id (o null).
+async function resolvePortfolioId(db, raw) {
+  if (raw === undefined || raw === null || raw === '') return null;
+  const id = Number(raw);
+  if (!Number.isInteger(id) || id <= 0) throw { status: 400, message: 'portfolioId inválido' };
+  const exists = await db.prepare('SELECT id FROM portfolios WHERE id = ?').bind(id).first();
+  if (!exists) throw { status: 400, message: 'La cartera indicada no existe' };
+  return id;
+}
+
 export async function create(db, body) {
   const errors = validateBody(body);
   if (errors.length) throw { status: 400, message: errors.join(', ') };
@@ -45,13 +58,15 @@ export async function create(db, body) {
   const price = Number(body.price);
   const fee = Number(body.fee) || 0;
   const ccl = body.ccl != null && body.ccl !== '' ? Number(body.ccl) : null;
+  const sector = (body.sector && String(body.sector).trim()) || 'General';
+  const portfolioId = await resolvePortfolioId(db, body.portfolioId);
 
   const info = await db
     .prepare(
-      `INSERT INTO trades (trade_date, asset_type, ticker, operation, quantity, price, fee, notes, ccl)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO trades (trade_date, asset_type, ticker, operation, quantity, price, fee, notes, ccl, sector, portfolio_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
-    .bind(date, assetType, ticker, operation, quantity, price, fee, notes, ccl)
+    .bind(date, assetType, ticker, operation, quantity, price, fee, notes, ccl, sector, portfolioId)
     .run();
 
   const created = await db.prepare('SELECT * FROM trades WHERE id = ?').bind(info.meta.last_row_id).first();
@@ -78,12 +93,19 @@ export async function update(db, id, body) {
   const ccl = body.ccl !== undefined
     ? (body.ccl === '' || body.ccl === null ? null : Number(body.ccl))
     : existing.ccl;
+  const sector = body.sector !== undefined
+    ? (String(body.sector).trim() || 'General')
+    : (existing.sector || 'General');
+  const portfolioId = body.portfolioId !== undefined
+    ? await resolvePortfolioId(db, body.portfolioId)
+    : (existing.portfolio_id ?? null);
 
   await db
     .prepare(
       `UPDATE trades SET
         trade_date = ?, asset_type = ?, ticker = ?, operation = ?,
-        quantity = ?, price = ?, fee = ?, notes = ?, ccl = ?, updated_at = datetime('now')
+        quantity = ?, price = ?, fee = ?, notes = ?, ccl = ?, sector = ?, portfolio_id = ?,
+        updated_at = datetime('now')
        WHERE id = ?`
     )
     .bind(
@@ -96,6 +118,8 @@ export async function update(db, id, body) {
       fee,
       notes,
       ccl,
+      sector,
+      portfolioId,
       id
     )
     .run();

@@ -7,6 +7,8 @@ import {
   updateTrade,
   deleteTrade,
 } from '../services/tradesService'
+import { getPortfolios } from '../services/portfoliosService'
+import { PORTFOLIO_ASSET_BY_TICKER } from '../data/argentinePortfolioAssets'
 
 const emit = defineEmits(['close'])
 
@@ -163,6 +165,10 @@ function todayISO() {
   return new Date().toISOString().slice(0, 10)
 }
 
+// Última cartera elegida en esta sesión: al cargar varias compras seguidas
+// para la misma cartera no hace falta volver a elegirla cada vez.
+let lastPortfolioId = ''
+
 function emptyForm() {
   return {
     date: todayISO(),
@@ -173,12 +179,43 @@ function emptyForm() {
     price: '',
     fee: '',
     ccl: '',
+    sector: 'General',
+    portfolioId: lastPortfolioId,
     notes: '',
   }
 }
 
 const form = reactive(emptyForm())
 const formError = ref('')
+
+// --- Sector y cartera de destino de cada operación ---
+const SECTORS = [
+  'General', 'Tecnología', 'Financiero', 'Energía', 'Consumo', 'Salud',
+  'Industrial', 'Materiales', 'Utilities', 'Comunicación', 'Real Estate',
+]
+const portfolios = ref([])
+
+async function loadPortfoliosForForm() {
+  try {
+    portfolios.value = await getPortfolios()
+  } catch {
+    portfolios.value = []
+  }
+}
+
+function portfolioName(id) {
+  return portfolios.value.find((p) => p.id === id)?.name || `Cartera #${id}`
+}
+
+// Sector detectado desde el catálogo según el ticker que se está escribiendo.
+const detectedSector = computed(() => PORTFOLIO_ASSET_BY_TICKER[form.ticker.trim().toUpperCase()]?.sector || null)
+
+// Al tipear el ticker: si está en el catálogo, se autocompleta el sector
+// (editable). Va por @input y no por watch para no pisar el sector guardado
+// cuando se edita una operación existente.
+function onTickerInput() {
+  if (detectedSector.value) form.sector = detectedSector.value
+}
 
 function formatMoney(n) {
   if (n === null || n === undefined || n === '') return '—'
@@ -722,6 +759,8 @@ function startEdit(trade) {
   form.price = trade.price
   form.fee = trade.fee
   form.ccl = trade.ccl ?? ''
+  form.sector = trade.sector || 'General'
+  form.portfolioId = trade.portfolioId ?? ''
   form.notes = trade.notes
   // Al editar no pisamos el CCL ya cargado; si cambian la fecha, ahí sí
   // se vuelve a buscar automáticamente.
@@ -774,6 +813,8 @@ async function submitForm() {
     price: Number(form.price),
     fee: Number(form.fee) || 0,
     ccl: form.ccl === '' ? null : Number(form.ccl),
+    sector: form.sector || 'General',
+    portfolioId: form.portfolioId === '' ? null : Number(form.portfolioId),
     notes: form.notes.trim(),
   }
 
@@ -787,6 +828,7 @@ async function submitForm() {
       const created = await createTrade(payload)
       trades.value.push(created)
     }
+    lastPortfolioId = form.portfolioId
     cancelEdit()
     await refreshSummary()
   } catch (e) {
@@ -819,6 +861,7 @@ function onOverlayClick(e) {
 
 onMounted(() => {
   loadAll()
+  loadPortfoliosForForm()
 
   refreshLiveCCL()
   intervaloCclActual = setInterval(refreshLiveCCL, CCL_REFRESH_MS)
@@ -945,6 +988,8 @@ onUnmounted(() => {
                   <span class="ticker-cell">{{ t.ticker }}</span>
                   <span class="badge" :class="t.assetType === 'CEDEAR' ? 'badge-cedear' : 'badge-ar'">{{ t.assetType === 'CEDEAR' ? 'CEDEAR' : 'Acción AR' }}</span>
                   <span class="badge" :class="t.operation === 'COMPRA' ? 'badge-buy' : 'badge-sell'">{{ t.operation === 'COMPRA' ? 'Compra' : 'Venta' }}</span>
+                  <span v-if="t.sector && t.sector !== 'General'" class="badge badge-sector">{{ t.sector }}</span>
+                  <span v-if="t.portfolioId" class="badge badge-portfolio">🧩 {{ portfolioName(t.portfolioId) }}</span>
                 </div>
                 <div class="entry-card-actions">
                   <button class="icon-btn" title="Editar" @click="startEdit(t)">✎</button>
@@ -1084,7 +1129,15 @@ onUnmounted(() => {
             </div>
             <div class="form-field">
               <label>Ticker</label>
-              <input type="text" v-model="form.ticker" placeholder="Ej: KO, GGAL" style="text-transform:uppercase" required>
+              <input type="text" v-model="form.ticker" @input="onTickerInput" placeholder="Ej: KO, GGAL" style="text-transform:uppercase" required>
+            </div>
+            <div class="form-field">
+              <label>Sector</label>
+              <select v-model="form.sector">
+                <option v-for="sec in SECTORS" :key="sec" :value="sec">{{ sec }}</option>
+              </select>
+              <span v-if="detectedSector" class="field-hint">Detectado por el ticker: {{ detectedSector }}</span>
+              <span v-else-if="form.ticker.trim() && form.sector === 'General'" class="field-hint">Ticker fuera del catálogo: elegí el sector a mano.</span>
             </div>
             <div class="form-field">
               <label>Operación</label>
@@ -1121,6 +1174,14 @@ onUnmounted(() => {
                 <button type="button" class="icon-btn" title="Volver a buscar el CCL de esta fecha" @click="refetchCCL">🔄</button>
               </div>
               <div v-if="cclMsg" class="ccl-hint">{{ cclMsg }}</div>
+            </div>
+            <div class="form-field">
+              <label>Cartera</label>
+              <select v-model="form.portfolioId">
+                <option value="">Sin cartera</option>
+                <option v-for="pf in portfolios" :key="pf.id" :value="pf.id">{{ pf.name }}</option>
+              </select>
+              <span v-if="!portfolios.length" class="field-hint">Todavía no creaste carteras (Armado de Carteras).</span>
             </div>
             <div class="form-field form-field-wide">
               <label>Notas</label>
@@ -1834,6 +1895,21 @@ onUnmounted(() => {
   border-radius: 999px;
   font-size: 11.5px;
   font-weight: 700;
+}
+
+.field-hint {
+  font-size: 11.5px;
+  color: var(--text-dim);
+}
+
+.badge-sector {
+  background: rgba(148, 163, 184, 0.15);
+  color: var(--text-dim);
+}
+
+.badge-portfolio {
+  background: rgba(52, 211, 153, 0.15);
+  color: #34d399;
 }
 
 .badge-cedear {

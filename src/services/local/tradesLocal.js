@@ -22,6 +22,8 @@ function formatTrade(row) {
     price: row.price,
     fee: row.fee,
     notes: row.notes,
+    sector: row.sector || 'General',
+    portfolioId: row.portfolio_id ?? null,
     total:
       row.operation === 'COMPRA'
         ? row.quantity * row.price + row.fee
@@ -39,6 +41,15 @@ function validateBody(body) {
   if (!(Number(body.quantity) > 0)) errors.push('quantity debe ser mayor a 0')
   if (!(Number(body.price) > 0)) errors.push('price debe ser mayor a 0')
   return errors
+}
+
+// Normaliza el portfolioId recibido: vacío/null => sin cartera; si viene un
+// id, verifica que la cartera exista en el almacenamiento local.
+function resolvePortfolioId(raw) {
+  if (raw === undefined || raw === null || raw === '') return null
+  const exists = localStore.readTable('portfolios').some((p) => String(p.id) === String(raw))
+  if (!exists) throw new Error('La cartera indicada no existe')
+  return Number(raw)
 }
 
 function sortRows(rows) {
@@ -64,6 +75,8 @@ export async function create(body) {
     price: Number(body.price),
     fee: Number(body.fee) || 0,
     notes: body.notes || '',
+    sector: (body.sector && String(body.sector).trim()) || 'General',
+    portfolio_id: resolvePortfolioId(body.portfolioId),
     created_at: now,
     updated_at: now,
   }
@@ -101,6 +114,8 @@ export async function update(id, body) {
     price: Number(merged.price),
     fee: body.fee !== undefined ? Number(body.fee) : existing.fee,
     notes: body.notes !== undefined ? body.notes : existing.notes,
+    sector: body.sector !== undefined ? (String(body.sector).trim() || 'General') : (existing.sector || 'General'),
+    portfolio_id: body.portfolioId !== undefined ? resolvePortfolioId(body.portfolioId) : (existing.portfolio_id ?? null),
     updated_at: new Date().toISOString(),
   }
 

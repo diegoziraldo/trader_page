@@ -69,6 +69,14 @@ CREATE TABLE IF NOT EXISTS trades (
   price REAL NOT NULL,
   fee REAL NOT NULL DEFAULT 0,
   notes TEXT NOT NULL DEFAULT '',
+  -- Sector del papel al momento de la operación. Se autocompleta desde el
+  -- catálogo (src/data/argentinePortfolioAssets.js) si el ticker está ahí;
+  -- si no, lo carga el usuario a mano.
+  sector TEXT NOT NULL DEFAULT 'General',
+  -- Cartera a la que se destina esta compra/venta (Armado de Carteras).
+  -- Nullable: no todas las operaciones tienen por qué pertenecer a una
+  -- cartera (ej. trades de prueba, o cargados antes de este campo existir).
+  portfolio_id INTEGER REFERENCES portfolios(id) ON DELETE SET NULL,
   -- Dólar CCL vigente el día de la operación. Con esto se puede calcular el
   -- rendimiento en USD de cada CEDEAR/acción (precio_ars / ccl), además del
   -- rendimiento en pesos. Nullable: operaciones viejas pueden no tenerlo
@@ -174,17 +182,4 @@ CREATE TABLE IF NOT EXISTS portfolio_positions (
   manual_price REAL,
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-
--- Historial de valor de la cartera, un punto por día, para armar los
--- gráficos de rendimiento diario y mensual. Vive en la base (no en
--- localStorage) para que sea el mismo dato sin importar desde qué
--- dispositivo, navegador o URL de deploy abras la app.
-CREATE TABLE IF NOT EXISTS portfolio_value_snapshots (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  portfolio_id INTEGER NOT NULL REFERENCES portfolios(id) ON DELETE CASCADE,
-  snapshot_date TEXT NOT NULL, -- 'YYYY-MM-DD'
-  value_ars REAL NOT NULL,
-  created_at TEXT NOT NULL DEFAULT (datetime('now')),
-  UNIQUE(portfolio_id, snapshot_date)
 );

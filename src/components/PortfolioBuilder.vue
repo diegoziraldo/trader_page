@@ -285,7 +285,7 @@ async function importFromTrades() {
     `Esto va a sincronizar la cartera "${selectedPortfolio.value.name}" con "Mis Trades": crea una posición ` +
     `nueva por cada ticker que todavía no tenga (con la fecha de tu primera compra), actualiza cantidad/precio ` +
     `promedio si compraste o vendiste algo más, y BORRA la posición si vendiste el ticker por completo (tenencia ` +
-    `neta cero). ¿Continuar?`
+    `neta cero). Se usan los trades asignados a esta cartera y los que no tienen cartera asignada. ¿Continuar?`
   )
   if (!ok) return
 
@@ -293,13 +293,19 @@ async function importFromTrades() {
   errorMsg.value = ''
   importResult.value = null
   try {
-    const trades = await getTrades()
+    const allTrades = await getTrades()
+    // Cuentan los trades asignados a ESTA cartera y los que no tienen cartera
+    // (cargados antes de que existiera ese campo). Los asignados a otra
+    // cartera se ignoran.
+    const trades = allTrades.filter((t) => t.portfolioId == null || String(t.portfolioId) === String(selectedId.value))
 
-    // Agrupar por ticker: tenencia neta, y lista de compras (fecha, cantidad, precio).
+    // Agrupar por ticker: tenencia neta, lista de compras (fecha, cantidad, precio)
+    // y sector (el del trade más reciente que lo tenga cargado).
     const byTicker = {}
     for (const t of trades) {
-      if (!byTicker[t.ticker]) byTicker[t.ticker] = { assetType: t.assetType, buys: [], netQty: 0 }
+      if (!byTicker[t.ticker]) byTicker[t.ticker] = { assetType: t.assetType, buys: [], netQty: 0, sector: null }
       const entry = byTicker[t.ticker]
+      if (t.sector && t.sector !== 'General') entry.sector = t.sector
       const qty = Number(t.quantity)
       if (t.operation === 'COMPRA') {
         entry.buys.push({ date: t.date, qty, price: Number(t.price) })
@@ -326,6 +332,9 @@ async function importFromTrades() {
           // Ya existía: actualizamos cantidad/precio (mantiene su fecha de alta original).
           const payload = { quantity: data.netQty }
           if (avgPrice != null) payload.avgPrice = avgPrice
+          // Si la posición quedó en "General", se completa con el sector del trade o del catálogo.
+          const knownSector = data.sector || PORTFOLIO_ASSET_BY_TICKER[ticker]?.sector
+          if (existing.sector === 'General' && knownSector) payload.sector = knownSector
           const updatedPos = await updatePosition(existing.id, payload)
           const idx = positions.value.findIndex((p) => p.id === existing.id)
           if (idx !== -1) positions.value[idx] = updatedPos
@@ -345,10 +354,9 @@ async function importFromTrades() {
       }
 
       const earliestBuyDate = data.buys.reduce((min, b) => (b.date < min ? b.date : min), data.buys[0].date)
-      // "Mis Trades" no guarda sector, pero si el ticker está en nuestro
-      // catálogo (src/data/argentinePortfolioAssets.js) lo tomamos de ahí
-      // en vez de dejarlo en "General".
-      const catalogSector = PORTFOLIO_ASSET_BY_TICKER[ticker]?.sector
+      // Sector: el cargado en el trade; si no, el del catálogo
+      // (src/data/argentinePortfolioAssets.js); si no, queda en "General".
+      const catalogSector = data.sector || PORTFOLIO_ASSET_BY_TICKER[ticker]?.sector
       const createdPos = await createPosition(selectedId.value, {
         assetType: data.assetType,
         ticker,
@@ -860,7 +868,7 @@ function onOverlayClick(e) {
         <div class="pf-title">
           <span class="pf-icon">🧩</span>
           Armado de Carteras
-          <span class="build-tag" title="Si este número no cambió después de un deploy nuevo, el navegador está sirviendo el JS viejo (caché) y hay que forzar una recarga.">build 2026-09-26.6</span>
+          <span class="build-tag" title="Si este número no cambió después de un deploy nuevo, el navegador está sirviendo el JS viejo (caché) y hay que forzar una recarga.">build 2026-09-28.1</span>
         </div>
         <button class="close-btn" @click="close" title="Cerrar">✕</button>
       </div>

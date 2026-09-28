@@ -114,6 +114,15 @@ const tradesColumns = db.prepare("PRAGMA table_info(trades)").all().map((c) => c
 if (!tradesColumns.includes('ccl')) {
   db.exec('ALTER TABLE trades ADD COLUMN ccl REAL;');
 }
+// Sector del papel y cartera de destino de cada operación (Armado de
+// Carteras). `portfolio_id` es nullable: los trades viejos quedan sin
+// cartera asignada.
+if (!tradesColumns.includes('sector')) {
+  db.exec("ALTER TABLE trades ADD COLUMN sector TEXT NOT NULL DEFAULT 'General';");
+}
+if (!tradesColumns.includes('portfolio_id')) {
+  db.exec('ALTER TABLE trades ADD COLUMN portfolio_id INTEGER REFERENCES portfolios(id) ON DELETE SET NULL;');
+}
 
 // Planilla profesional de trading (plan de trade completo, para cualquier
 // tipo de instrumento: acciones, CEDEARs, forex, futuros, cripto, opciones,
@@ -199,16 +208,6 @@ db.exec(`
     manual_price REAL,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-  );
-`);
-db.exec(`
-  CREATE TABLE IF NOT EXISTS portfolio_value_snapshots (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    portfolio_id INTEGER NOT NULL REFERENCES portfolios(id) ON DELETE CASCADE,
-    snapshot_date TEXT NOT NULL,
-    value_ars REAL NOT NULL,
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    UNIQUE(portfolio_id, snapshot_date)
   );
 `);
 db.pragma('foreign_keys = ON');
