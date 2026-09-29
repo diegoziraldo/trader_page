@@ -8,6 +8,7 @@ import {
   deleteTrade,
 } from '../services/tradesService'
 import { getPortfolios } from '../services/portfoliosService'
+import { syncPortfolioFromTrades } from '../services/portfolioSyncService'
 import { PORTFOLIO_ASSET_BY_TICKER } from '../data/argentinePortfolioAssets'
 
 const emit = defineEmits(['close'])
@@ -818,6 +819,10 @@ async function submitForm() {
     notes: form.notes.trim(),
   }
 
+  const previousPortfolioId = editingId.value
+    ? trades.value.find((t) => t.id === editingId.value)?.portfolioId ?? null
+    : null
+
   saving.value = true
   try {
     if (editingId.value) {
@@ -831,6 +836,18 @@ async function submitForm() {
     lastPortfolioId = form.portfolioId
     cancelEdit()
     await refreshSummary()
+
+    // Auto-sync: si esta operación tiene (o tenía) una cartera asignada, esa
+    // cartera se actualiza sola con este ticker — no hace falta ir a "Armado
+    // de Carteras" y apretar sincronizar a mano.
+    const affected = new Set([payload.portfolioId, previousPortfolioId].filter((id) => id != null))
+    for (const pid of affected) {
+      try {
+        await syncPortfolioFromTrades(pid, { tickers: [ticker] })
+      } catch (e) {
+        console.error('No se pudo sincronizar la cartera', pid, e)
+      }
+    }
   } catch (e) {
     formError.value = e.message
   } finally {
@@ -846,6 +863,13 @@ async function removeTrade(trade) {
     trades.value = trades.value.filter((t) => t.id !== trade.id)
     if (editingId.value === trade.id) cancelEdit()
     await refreshSummary()
+    if (trade.portfolioId != null) {
+      try {
+        await syncPortfolioFromTrades(trade.portfolioId, { tickers: [trade.ticker] })
+      } catch (e) {
+        console.error('No se pudo sincronizar la cartera', trade.portfolioId, e)
+      }
+    }
   } catch (e) {
     errorMsg.value = e.message
   }
