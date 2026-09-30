@@ -78,6 +78,15 @@ export function planSync(allTrades, positions, portfolioId, opts = {}) {
         if (Math.abs(Number(existing.quantity) - data.netQty) > 1e-9) payload.quantity = data.netQty
         if (avgPrice != null && Math.abs(Number(existing.avgPrice) - avgPrice) > 1e-6) payload.avgPrice = avgPrice
         if (existing.sector === 'General' && knownSector) payload.sector = knownSector
+        // Completa ratio/subyacente si la posición no los tenía cargados
+        // (ej. se creó antes de que el catálogo tuviera este ticker).
+        const catalogAsset = PORTFOLIO_ASSET_BY_TICKER[ticker]
+        if (existing.assetType === 'CEDEAR' && existing.ratio == null && catalogAsset?.ratio != null) {
+          payload.ratio = catalogAsset.ratio
+        }
+        if (existing.assetType === 'CEDEAR' && !existing.underlyingTicker && catalogAsset) {
+          payload.underlyingTicker = catalogAsset.ticker
+        }
         if (Object.keys(payload).length) actions.push({ type: 'update', id: existing.id, ticker, payload })
       } else {
         actions.push({ type: 'delete', id: existing.id, ticker })
@@ -91,6 +100,7 @@ export function planSync(allTrades, positions, portfolioId, opts = {}) {
     }
 
     const earliestBuyDate = data.buys.reduce((min, b) => (b.date < min ? b.date : min), data.buys[0].date)
+    const catalogAsset = PORTFOLIO_ASSET_BY_TICKER[ticker]
     actions.push({
       type: 'create',
       ticker,
@@ -101,6 +111,11 @@ export function planSync(allTrades, positions, portfolioId, opts = {}) {
         avgPrice,
         createdAt: earliestBuyDate,
         sector: knownSector || undefined,
+        // Ratio y subyacente: solo tienen sentido para CEDEARs, y solo si
+        // el catálogo los tiene cargados (igual criterio que el sector: si
+        // no hay match, quedan sin cargar y se completan a mano).
+        ratio: data.assetType === 'CEDEAR' ? catalogAsset?.ratio ?? undefined : undefined,
+        underlyingTicker: data.assetType === 'CEDEAR' ? catalogAsset?.ticker ?? undefined : undefined,
       },
     })
   }

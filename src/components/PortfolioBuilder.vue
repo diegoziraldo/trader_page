@@ -148,11 +148,24 @@ const form = reactive(emptyForm())
 const formError = ref('')
 const editingPositionId = ref(null)
 
-// Detección automática de beta: si el ticker que escribiste a mano coincide
-// con uno del catálogo (src/data/argentinePortfolioAssets.js), se muestra
-// como referencia junto al campo. No fuerza nada — el resto de los campos
-// (tipo de activo, sector, subyacente, ratio) siempre se cargan a mano.
+// Detección automática por catálogo: si el ticker que escribiste coincide
+// con uno de src/data/argentinePortfolioAssets.js, se autocompletan sector,
+// ratio (solo CEDEAR) y ticker subyacente — pero solo mientras esos campos
+// sigan en su valor por defecto, para no pisar algo que ya cargaste a mano.
+// Si el ticker no está en el catálogo (o no tiene ratio cargado), esos
+// campos quedan como estaban: los cargás vos.
 const detectedAsset = computed(() => PORTFOLIO_ASSET_BY_TICKER[form.ticker.trim().toUpperCase()] || null)
+
+function onTickerInput() {
+  const asset = detectedAsset.value
+  if (!asset) return
+  if (form.assetType === 'CEDEAR' && asset.assetType === 'ACCION_AR') form.assetType = 'ACCION_AR'
+  if (form.sector === 'General') form.sector = asset.sector
+  if (form.assetType === 'CEDEAR') {
+    if (form.underlyingTicker === '') form.underlyingTicker = asset.ticker
+    if (form.ratio === '' && asset.ratio != null) form.ratio = asset.ratio
+  }
+}
 
 const SECTORS = [
   'General', 'Tecnología', 'Financiero', 'Energía', 'Consumo', 'Salud',
@@ -260,13 +273,17 @@ async function fixSectorsFromCatalog() {
     let fixed = 0
     let noMatch = 0
     for (const p of positions.value) {
-      if (p.sector !== 'General') continue
-      const catalogSector = PORTFOLIO_ASSET_BY_TICKER[p.ticker]?.sector
-      if (!catalogSector) {
-        noMatch++
+      const asset = PORTFOLIO_ASSET_BY_TICKER[p.ticker]
+      const payload = {}
+      if (p.sector === 'General' && asset?.sector) payload.sector = asset.sector
+      if (p.assetType === 'CEDEAR' && p.ratio == null && asset?.ratio != null) payload.ratio = asset.ratio
+      if (p.assetType === 'CEDEAR' && !p.underlyingTicker && asset) payload.underlyingTicker = asset.ticker
+
+      if (!Object.keys(payload).length) {
+        if (p.sector === 'General' || (p.assetType === 'CEDEAR' && p.ratio == null)) noMatch++
         continue
       }
-      const updatedPos = await updatePosition(p.id, { sector: catalogSector })
+      const updatedPos = await updatePosition(p.id, payload)
       const idx = positions.value.findIndex((pos) => pos.id === p.id)
       if (idx !== -1) positions.value[idx] = updatedPos
       fixed++
@@ -793,7 +810,7 @@ function onOverlayClick(e) {
         <div class="pf-title">
           <span class="pf-icon">🧩</span>
           Armado de Carteras
-          <span class="build-tag" title="Si este número no cambió después de un deploy nuevo, el navegador está sirviendo el JS viejo (caché) y hay que forzar una recarga.">build 2026-09-28.2</span>
+          <span class="build-tag" title="Si este número no cambió después de un deploy nuevo, el navegador está sirviendo el JS viejo (caché) y hay que forzar una recarga.">build 2026-09-28.3</span>
         </div>
         <button class="close-btn" @click="close" title="Cerrar">✕</button>
       </div>
@@ -932,7 +949,7 @@ function onOverlayClick(e) {
                     <template v-if="importResult.skippedClosed"> · {{ importResult.skippedClosed }} sin tenencia neta</template>
                   </span>
                   <button type="button" class="btn-secondary btn-small" :disabled="fixingSectors" @click="fixSectorsFromCatalog">
-                    {{ fixingSectors ? 'Corrigiendo...' : '🔧 Corregir sectores desde catálogo' }}
+                    {{ fixingSectors ? 'Corrigiendo...' : '🔧 Corregir sector/ratio desde catálogo' }}
                   </button>
                   <span v-if="fixSectorsResult" class="import-result-text">
                     {{ fixSectorsResult.fixed }} corregida(s)
@@ -1050,8 +1067,8 @@ function onOverlayClick(e) {
                   <div class="form-grid">
                     <div class="form-field">
                       <label>Ticker</label>
-                      <input type="text" v-model="form.ticker" placeholder="Ej: AAPL, GGAL" style="text-transform:uppercase" required>
-                      <span v-if="detectedAsset" class="field-hint">β {{ detectedAsset.beta }} de referencia · {{ detectedAsset.sector }}</span>
+                      <input type="text" v-model="form.ticker" @input="onTickerInput" placeholder="Ej: AAPL, GGAL" style="text-transform:uppercase" required>
+                      <span v-if="detectedAsset" class="field-hint">β {{ detectedAsset.beta }} de referencia · {{ detectedAsset.sector }}{{ detectedAsset.ratio ? ` · ratio ${detectedAsset.ratio}` : '' }}</span>
                     </div>
                     <div class="form-field">
                       <label>Tipo de activo</label>
@@ -1068,7 +1085,7 @@ function onOverlayClick(e) {
                         <input type="text" v-model="form.underlyingTicker" placeholder="Ej: AAPL" style="text-transform:uppercase">
                       </div>
                       <div class="form-field">
-                        <label title="Cuántos CEDEARs equivalen a 1 acción. Con esto se valúa en USD contra el precio real de la acción.">
+                        <label title="Cuántos CEDEARs equivalen a 1 acción. Con esto se valúa en USD contra el precio real de la acción. Se autocompleta si el ticker está en el catálogo; si no, cargalo a mano.">
                           Ratio (CEDEARs x acción)
                         </label>
                         <input type="number" min="0" step="any" v-model="form.ratio" placeholder="Ej: 10">

@@ -9,9 +9,13 @@
 //  - `beta` es un valor aproximado de referencia (distintas fuentes y
 //    ventanas de cálculo dan números distintos; es orientativo para pensar
 //    el perfil de riesgo, no un dato exacto ni actualizado en tiempo real).
-//  - No incluye el ratio de conversión del CEDEAR a propósito: el ratio
-//    cambia con splits/ajustes y hay que confirmarlo con el broker antes de
-//    operar. Por eso el campo "ratio" se carga a mano en el formulario.
+//  - No incluye el ratio de conversión para la mayoría de los CEDEARs a
+//    propósito: el ratio cambia con splits/ajustes societarios y hay que
+//    confirmarlo con el broker antes de operar. Para un subconjunto de
+//    papeles grandes y sin splits recientes conocidos, sí se incluye un
+//    ratio de referencia (igual que el beta: aproximado, verificar antes de
+//    operar) para autocompletar el campo; el resto queda vacío y se carga
+//    a mano, exactamente igual que el sector cuando no hay match.
 //
 // Si un ticker que necesitás no está acá, cargalo igual a mano en el
 // formulario (tipo de activo y sector manuales) — simplemente no vas a
@@ -28,10 +32,10 @@ export const PORTFOLIO_ASSET_CATALOG = [
   { ticker: 'ORCL', name: 'Oracle Corp.', assetType: 'CEDEAR', sector: 'Tecnología', beta: 1.1 },
   { ticker: 'CRM', name: 'Salesforce Inc.', assetType: 'CEDEAR', sector: 'Tecnología', beta: 1.2 },
   { ticker: 'ADBE', name: 'Adobe Inc.', assetType: 'CEDEAR', sector: 'Tecnología', beta: 1.3 },
-  { ticker: 'IBM', name: 'IBM Corp.', assetType: 'CEDEAR', sector: 'Tecnología', beta: 0.7 },
-  { ticker: 'CSCO', name: 'Cisco Systems', assetType: 'CEDEAR', sector: 'Tecnología', beta: 0.9 },
+  { ticker: 'IBM', name: 'IBM Corp.', assetType: 'CEDEAR', sector: 'Tecnología', beta: 0.7, ratio: 5 },
+  { ticker: 'CSCO', name: 'Cisco Systems', assetType: 'CEDEAR', sector: 'Tecnología', beta: 0.9, ratio: 4 },
   { ticker: 'QCOM', name: 'Qualcomm Inc.', assetType: 'CEDEAR', sector: 'Tecnología', beta: 1.3 },
-  { ticker: 'INTC', name: 'Intel Corp.', assetType: 'CEDEAR', sector: 'Tecnología', beta: 1.0 },
+  { ticker: 'INTC', name: 'Intel Corp.', assetType: 'CEDEAR', sector: 'Tecnología', beta: 1.0, ratio: 4 },
   { ticker: 'AMD', name: 'Advanced Micro Devices', assetType: 'CEDEAR', sector: 'Tecnología', beta: 1.7 },
   { ticker: 'SHOP', name: 'Shopify Inc.', assetType: 'CEDEAR', sector: 'Tecnología', beta: 2.3 },
   { ticker: 'GLOB', name: 'Globant S.A.', assetType: 'CEDEAR', sector: 'Tecnología', beta: 1.5 },
@@ -49,9 +53,9 @@ export const PORTFOLIO_ASSET_CATALOG = [
   { ticker: 'GOOGL', name: 'Alphabet Inc.', assetType: 'CEDEAR', sector: 'Comunicación', beta: 1.05 },
   { ticker: 'META', name: 'Meta Platforms', assetType: 'CEDEAR', sector: 'Comunicación', beta: 1.2 },
   { ticker: 'NFLX', name: 'Netflix Inc.', assetType: 'CEDEAR', sector: 'Comunicación', beta: 1.3 },
-  { ticker: 'DIS', name: 'Walt Disney Co.', assetType: 'CEDEAR', sector: 'Comunicación', beta: 1.2 },
-  { ticker: 'T', name: 'AT&T Inc.', assetType: 'CEDEAR', sector: 'Comunicación', beta: 0.6 },
-  { ticker: 'VZ', name: 'Verizon Communications', assetType: 'CEDEAR', sector: 'Comunicación', beta: 0.4 },
+  { ticker: 'DIS', name: 'Walt Disney Co.', assetType: 'CEDEAR', sector: 'Comunicación', beta: 1.2, ratio: 10 },
+  { ticker: 'T', name: 'AT&T Inc.', assetType: 'CEDEAR', sector: 'Comunicación', beta: 0.6, ratio: 3 },
+  { ticker: 'VZ', name: 'Verizon Communications', assetType: 'CEDEAR', sector: 'Comunicación', beta: 0.4, ratio: 3 },
   { ticker: 'TMUS', name: 'T-Mobile US', assetType: 'CEDEAR', sector: 'Comunicación', beta: 0.7 },
   { ticker: 'BIDU', name: 'Baidu Inc.', assetType: 'CEDEAR', sector: 'Comunicación', beta: 0.7 },
   { ticker: 'SNAP', name: 'Snap Inc.', assetType: 'CEDEAR', sector: 'Comunicación', beta: 1.4 },
@@ -60,17 +64,17 @@ export const PORTFOLIO_ASSET_CATALOG = [
   // ---------------- CEDEARs: Consumo ----------------
   { ticker: 'AMZN', name: 'Amazon.com Inc.', assetType: 'CEDEAR', sector: 'Consumo', beta: 1.3 },
   { ticker: 'TSLA', name: 'Tesla Inc.', assetType: 'CEDEAR', sector: 'Consumo', beta: 2.0 },
-  { ticker: 'MCD', name: "McDonald's Corp.", assetType: 'CEDEAR', sector: 'Consumo', beta: 0.7 },
-  { ticker: 'NKE', name: 'Nike Inc.', assetType: 'CEDEAR', sector: 'Consumo', beta: 1.1 },
-  { ticker: 'SBUX', name: 'Starbucks Corp.', assetType: 'CEDEAR', sector: 'Consumo', beta: 1.0 },
-  { ticker: 'HD', name: 'Home Depot Inc.', assetType: 'CEDEAR', sector: 'Consumo', beta: 1.0 },
+  { ticker: 'MCD', name: "McDonald's Corp.", assetType: 'CEDEAR', sector: 'Consumo', beta: 0.7, ratio: 15 },
+  { ticker: 'NKE', name: 'Nike Inc.', assetType: 'CEDEAR', sector: 'Consumo', beta: 1.1, ratio: 8 },
+  { ticker: 'SBUX', name: 'Starbucks Corp.', assetType: 'CEDEAR', sector: 'Consumo', beta: 1.0, ratio: 8 },
+  { ticker: 'HD', name: 'Home Depot Inc.', assetType: 'CEDEAR', sector: 'Consumo', beta: 1.0, ratio: 20 },
   { ticker: 'MELI', name: 'MercadoLibre Inc.', assetType: 'CEDEAR', sector: 'Consumo', beta: 1.6 },
-  { ticker: 'BABA', name: 'Alibaba Group', assetType: 'CEDEAR', sector: 'Consumo', beta: 0.5 },
-  { ticker: 'KO', name: 'Coca-Cola Co.', assetType: 'CEDEAR', sector: 'Consumo', beta: 0.55 },
-  { ticker: 'PEP', name: 'PepsiCo Inc.', assetType: 'CEDEAR', sector: 'Consumo', beta: 0.5 },
+  { ticker: 'BABA', name: 'Alibaba Group', assetType: 'CEDEAR', sector: 'Consumo', beta: 0.5, ratio: 8 },
+  { ticker: 'KO', name: 'Coca-Cola Co.', assetType: 'CEDEAR', sector: 'Consumo', beta: 0.55, ratio: 12 },
+  { ticker: 'PEP', name: 'PepsiCo Inc.', assetType: 'CEDEAR', sector: 'Consumo', beta: 0.5, ratio: 15 },
   { ticker: 'WMT', name: 'Walmart Inc.', assetType: 'CEDEAR', sector: 'Consumo', beta: 0.5 },
-  { ticker: 'PG', name: 'Procter & Gamble', assetType: 'CEDEAR', sector: 'Consumo', beta: 0.4 },
-  { ticker: 'COST', name: 'Costco Wholesale', assetType: 'CEDEAR', sector: 'Consumo', beta: 0.75 },
+  { ticker: 'PG', name: 'Procter & Gamble', assetType: 'CEDEAR', sector: 'Consumo', beta: 0.4, ratio: 10 },
+  { ticker: 'COST', name: 'Costco Wholesale', assetType: 'CEDEAR', sector: 'Consumo', beta: 0.75, ratio: 30 },
   { ticker: 'TM', name: 'Toyota Motor Corp.', assetType: 'CEDEAR', sector: 'Consumo', beta: 0.6 },
   { ticker: 'JD', name: 'JD.com Inc.', assetType: 'CEDEAR', sector: 'Consumo', beta: 0.6 },
   { ticker: 'NIO', name: 'NIO Inc.', assetType: 'CEDEAR', sector: 'Consumo', beta: 2.2 },
@@ -79,25 +83,25 @@ export const PORTFOLIO_ASSET_CATALOG = [
   { ticker: 'BKNG', name: 'Booking Holdings', assetType: 'CEDEAR', sector: 'Consumo', beta: 1.2 },
 
   // ---------------- CEDEARs: Financiero ----------------
-  { ticker: 'JPM', name: 'JPMorgan Chase', assetType: 'CEDEAR', sector: 'Financiero', beta: 1.1 },
-  { ticker: 'BAC', name: 'Bank of America', assetType: 'CEDEAR', sector: 'Financiero', beta: 1.3 },
-  { ticker: 'GS', name: 'Goldman Sachs', assetType: 'CEDEAR', sector: 'Financiero', beta: 1.3 },
-  { ticker: 'V', name: 'Visa Inc.', assetType: 'CEDEAR', sector: 'Financiero', beta: 1.0 },
-  { ticker: 'MA', name: 'Mastercard Inc.', assetType: 'CEDEAR', sector: 'Financiero', beta: 1.1 },
-  { ticker: 'C', name: 'Citigroup Inc.', assetType: 'CEDEAR', sector: 'Financiero', beta: 1.5 },
-  { ticker: 'WFC', name: 'Wells Fargo', assetType: 'CEDEAR', sector: 'Financiero', beta: 1.1 },
+  { ticker: 'JPM', name: 'JPMorgan Chase', assetType: 'CEDEAR', sector: 'Financiero', beta: 1.1, ratio: 10 },
+  { ticker: 'BAC', name: 'Bank of America', assetType: 'CEDEAR', sector: 'Financiero', beta: 1.3, ratio: 3 },
+  { ticker: 'GS', name: 'Goldman Sachs', assetType: 'CEDEAR', sector: 'Financiero', beta: 1.3, ratio: 20 },
+  { ticker: 'V', name: 'Visa Inc.', assetType: 'CEDEAR', sector: 'Financiero', beta: 1.0, ratio: 10 },
+  { ticker: 'MA', name: 'Mastercard Inc.', assetType: 'CEDEAR', sector: 'Financiero', beta: 1.1, ratio: 10 },
+  { ticker: 'C', name: 'Citigroup Inc.', assetType: 'CEDEAR', sector: 'Financiero', beta: 1.5, ratio: 4 },
+  { ticker: 'WFC', name: 'Wells Fargo', assetType: 'CEDEAR', sector: 'Financiero', beta: 1.1, ratio: 3 },
   { ticker: 'BRK.B', name: 'Berkshire Hathaway', assetType: 'CEDEAR', sector: 'Financiero', beta: 0.85 },
   { ticker: 'PYPL', name: 'PayPal Holdings', assetType: 'CEDEAR', sector: 'Financiero', beta: 1.4 },
-  { ticker: 'AXP', name: 'American Express', assetType: 'CEDEAR', sector: 'Financiero', beta: 1.2 },
+  { ticker: 'AXP', name: 'American Express', assetType: 'CEDEAR', sector: 'Financiero', beta: 1.2, ratio: 10 },
   { ticker: 'SPGI', name: 'S&P Global Inc.', assetType: 'CEDEAR', sector: 'Financiero', beta: 1.1 },
   { ticker: 'SCHW', name: 'Charles Schwab Corp.', assetType: 'CEDEAR', sector: 'Financiero', beta: 1.2 },
 
   // ---------------- CEDEARs: Salud ----------------
-  { ticker: 'JNJ', name: 'Johnson & Johnson', assetType: 'CEDEAR', sector: 'Salud', beta: 0.5 },
-  { ticker: 'PFE', name: 'Pfizer Inc.', assetType: 'CEDEAR', sector: 'Salud', beta: 0.55 },
-  { ticker: 'MRK', name: 'Merck & Co.', assetType: 'CEDEAR', sector: 'Salud', beta: 0.4 },
-  { ticker: 'ABBV', name: 'AbbVie Inc.', assetType: 'CEDEAR', sector: 'Salud', beta: 0.6 },
-  { ticker: 'UNH', name: 'UnitedHealth Group', assetType: 'CEDEAR', sector: 'Salud', beta: 0.6 },
+  { ticker: 'JNJ', name: 'Johnson & Johnson', assetType: 'CEDEAR', sector: 'Salud', beta: 0.5, ratio: 12 },
+  { ticker: 'PFE', name: 'Pfizer Inc.', assetType: 'CEDEAR', sector: 'Salud', beta: 0.55, ratio: 4 },
+  { ticker: 'MRK', name: 'Merck & Co.', assetType: 'CEDEAR', sector: 'Salud', beta: 0.4, ratio: 5 },
+  { ticker: 'ABBV', name: 'AbbVie Inc.', assetType: 'CEDEAR', sector: 'Salud', beta: 0.6, ratio: 8 },
+  { ticker: 'UNH', name: 'UnitedHealth Group', assetType: 'CEDEAR', sector: 'Salud', beta: 0.6, ratio: 15 },
   { ticker: 'LLY', name: 'Eli Lilly and Co.', assetType: 'CEDEAR', sector: 'Salud', beta: 0.4 },
   { ticker: 'BMY', name: 'Bristol-Myers Squibb', assetType: 'CEDEAR', sector: 'Salud', beta: 0.4 },
   { ticker: 'ABT', name: 'Abbott Laboratories', assetType: 'CEDEAR', sector: 'Salud', beta: 0.7 },
@@ -108,23 +112,23 @@ export const PORTFOLIO_ASSET_CATALOG = [
   { ticker: 'ISRG', name: 'Intuitive Surgical', assetType: 'CEDEAR', sector: 'Salud', beta: 1.1 },
 
   // ---------------- CEDEARs: Industrial ----------------
-  { ticker: 'BA', name: 'Boeing Co.', assetType: 'CEDEAR', sector: 'Industrial', beta: 1.4 },
-  { ticker: 'CAT', name: 'Caterpillar Inc.', assetType: 'CEDEAR', sector: 'Industrial', beta: 1.1 },
+  { ticker: 'BA', name: 'Boeing Co.', assetType: 'CEDEAR', sector: 'Industrial', beta: 1.4, ratio: 15 },
+  { ticker: 'CAT', name: 'Caterpillar Inc.', assetType: 'CEDEAR', sector: 'Industrial', beta: 1.1, ratio: 10 },
   { ticker: 'GE', name: 'General Electric', assetType: 'CEDEAR', sector: 'Industrial', beta: 1.1 },
-  { ticker: 'HON', name: 'Honeywell Intl.', assetType: 'CEDEAR', sector: 'Industrial', beta: 0.9 },
-  { ticker: 'MMM', name: '3M Co.', assetType: 'CEDEAR', sector: 'Industrial', beta: 1.0 },
+  { ticker: 'HON', name: 'Honeywell Intl.', assetType: 'CEDEAR', sector: 'Industrial', beta: 0.9, ratio: 10 },
+  { ticker: 'MMM', name: '3M Co.', assetType: 'CEDEAR', sector: 'Industrial', beta: 1.0, ratio: 4 },
   { ticker: 'FDX', name: 'FedEx Corp.', assetType: 'CEDEAR', sector: 'Industrial', beta: 1.1 },
   { ticker: 'LMT', name: 'Lockheed Martin', assetType: 'CEDEAR', sector: 'Industrial', beta: 0.6 },
   { ticker: 'RTX', name: 'RTX Corp. (Raytheon)', assetType: 'CEDEAR', sector: 'Industrial', beta: 0.9 },
   { ticker: 'DE', name: 'Deere & Co.', assetType: 'CEDEAR', sector: 'Industrial', beta: 1.0 },
 
   // ---------------- CEDEARs: Energía ----------------
-  { ticker: 'XOM', name: 'Exxon Mobil Corp.', assetType: 'CEDEAR', sector: 'Energía', beta: 0.9 },
-  { ticker: 'CVX', name: 'Chevron Corp.', assetType: 'CEDEAR', sector: 'Energía', beta: 1.0 },
-  { ticker: 'PBR', name: 'Petrobras', assetType: 'CEDEAR', sector: 'Energía', beta: 1.3 },
+  { ticker: 'XOM', name: 'Exxon Mobil Corp.', assetType: 'CEDEAR', sector: 'Energía', beta: 0.9, ratio: 10 },
+  { ticker: 'CVX', name: 'Chevron Corp.', assetType: 'CEDEAR', sector: 'Energía', beta: 1.0, ratio: 10 },
+  { ticker: 'PBR', name: 'Petrobras', assetType: 'CEDEAR', sector: 'Energía', beta: 1.3, ratio: 3 },
 
   // ---------------- CEDEARs: Materiales ----------------
-  { ticker: 'VALE', name: 'Vale S.A.', assetType: 'CEDEAR', sector: 'Materiales', beta: 1.1 },
+  { ticker: 'VALE', name: 'Vale S.A.', assetType: 'CEDEAR', sector: 'Materiales', beta: 1.1, ratio: 3 },
   { ticker: 'FCX', name: 'Freeport-McMoRan', assetType: 'CEDEAR', sector: 'Materiales', beta: 1.8 },
   { ticker: 'NEM', name: 'Newmont Corp.', assetType: 'CEDEAR', sector: 'Materiales', beta: 0.4 },
   { ticker: 'GOLD', name: 'Barrick Gold Corp.', assetType: 'CEDEAR', sector: 'Materiales', beta: 0.4 },
