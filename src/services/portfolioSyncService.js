@@ -8,12 +8,10 @@ import { runSync } from './portfolioSyncPlan.js'
 
 const deps = { getTrades, getPositions, createPosition, updatePosition, deletePosition }
 
-// Refleja "Mis Trades" en las posiciones de la cartera `portfolioId`.
+// Refleja "Mis Trades" en las posiciones de la cartera `portfolioId`,
+// usando SOLO los trades asignados explícitamente a esa cartera.
 // opts.tickers: sincronización acotada a esos tickers (más rápida; la usa
 //   TradesModal al guardar/editar/borrar un trade puntual).
-// opts.includeAllUnassigned: trae también los trades viejos sin cartera
-//   asignada aunque la cartera no tenga ya esa posición (la usa el botón
-//   manual "Sincronizar con Mis Trades" de PortfolioBuilder).
 // opts.trades: lista de trades ya obtenida, para no volver a pedirla.
 export function syncPortfolioFromTrades(portfolioId, opts = {}) {
   return runSync(deps, portfolioId, opts)

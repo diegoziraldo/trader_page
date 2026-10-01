@@ -17,15 +17,13 @@
 //  - Sector: el del trade más reciente que lo tenga cargado (distinto de
 //    "General"); si ninguno, el del catálogo (argentinePortfolioAssets.js);
 //    si tampoco, "General".
-//  - Qué trades cuentan para una cartera: los asignados explícitamente a
-//    ella, más los SIN cartera asignada (trades viejos, de antes de que
-//    existiera este campo) — pero estos últimos solo si `includeAllUnassigned`
-//    es true, o si esa cartera ya tiene una posición de ese ticker. Así:
-//      · el botón manual "Sincronizar" (includeAllUnassigned: true) sí trae
-//        todo lo viejo sin cartera, como pediste.
-//      · el auto-sync al guardar UN trade nuevo con cartera asignada no
-//        contamina una cartera distinta ni una recién creada con trades
-//        viejos de otros tickers que nunca tuvo.
+//  - Qué trades cuentan para una cartera: SOLO los asignados explícitamente
+//    a ella (portfolioId === portfolioId). Los trades sin cartera asignada
+//    no entran a ninguna cartera automáticamente — hay que editarlos y
+//    elegirles una cartera para que empiecen a contar. Esto es a propósito:
+//    si un ticker (ej. AAPL) tiene compras repartidas entre varias carteras
+//    y además compras viejas sin cartera, cada cartera tiene que mostrar
+//    SOLO lo que es suyo, nunca el total sumado de todas.
 //  - Tenencia neta > 0: crea la posición si no existe, o la actualiza SOLO
 //    si algo realmente cambió (cantidad, precio promedio, o sector si
 //    estaba en "General"). Tenencia neta <= 0 y la posición existe: se
@@ -38,14 +36,12 @@
 import { PORTFOLIO_ASSET_BY_TICKER } from '../data/argentinePortfolioAssets.js'
 
 export function planSync(allTrades, positions, portfolioId, opts = {}) {
-  const { tickers = null, includeAllUnassigned = false } = opts
+  const { tickers = null } = opts
   const scoped = Array.isArray(tickers)
-  const heldTickers = new Set(positions.map((p) => p.ticker))
 
   const relevant = allTrades.filter((t) => {
     if (scoped && !tickers.includes(t.ticker)) return false
-    if (t.portfolioId != null) return String(t.portfolioId) === String(portfolioId)
-    return includeAllUnassigned || heldTickers.has(t.ticker)
+    return t.portfolioId != null && String(t.portfolioId) === String(portfolioId)
   })
 
   const byTicker = {}
@@ -134,7 +130,7 @@ export function planSync(allTrades, positions, portfolioId, opts = {}) {
 }
 
 // deps: { getTrades, getPositions, createPosition, updatePosition, deletePosition }
-// opts: { tickers?: string[], includeAllUnassigned?: boolean, trades?: Trade[] }
+// opts: { tickers?: string[], trades?: Trade[] }
 //   (trades: pasala si ya la tenés a mano, para no volver a pedirla)
 export async function runSync(deps, portfolioId, opts = {}) {
   const allTrades = opts.trades ?? (await deps.getTrades())

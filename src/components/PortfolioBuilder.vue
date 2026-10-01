@@ -302,7 +302,8 @@ async function importFromTrades() {
     `Esto va a sincronizar la cartera "${selectedPortfolio.value.name}" con "Mis Trades": crea una posición ` +
     `nueva por cada ticker que todavía no tenga (con la fecha de tu primera compra), actualiza cantidad/precio ` +
     `promedio si compraste o vendiste algo más, y BORRA la posición si vendiste el ticker por completo (tenencia ` +
-    `neta cero). Se usan los trades asignados a esta cartera y TODOS los que no tienen cartera asignada. ¿Continuar?`
+    `neta cero). Se usan SOLO los trades asignados a esta cartera (los que no tienen ninguna cartera asignada no ` +
+    `cuentan para ninguna). ¿Continuar?`
   )
   if (!ok) return
 
@@ -310,7 +311,7 @@ async function importFromTrades() {
   errorMsg.value = ''
   importResult.value = null
   try {
-    const summary = await syncPortfolioFromTrades(selectedId.value, { includeAllUnassigned: true })
+    const summary = await syncPortfolioFromTrades(selectedId.value)
     await loadPositions()
     recordTodaySnapshot()
     importResult.value = summary
@@ -810,7 +811,7 @@ function onOverlayClick(e) {
         <div class="pf-title">
           <span class="pf-icon">🧩</span>
           Armado de Carteras
-          <span class="build-tag" title="Si este número no cambió después de un deploy nuevo, el navegador está sirviendo el JS viejo (caché) y hay que forzar una recarga.">build 2026-09-28.3</span>
+          <span class="build-tag" title="Si este número no cambió después de un deploy nuevo, el navegador está sirviendo el JS viejo (caché) y hay que forzar una recarga.">build 2026-10-01.1</span>
         </div>
         <button class="close-btn" @click="close" title="Cerrar">✕</button>
       </div>
