@@ -1249,8 +1249,12 @@ onUnmounted(() => {
                     Cantidad
                     <span v-if="openPositionsSort.key === 'quantity'" class="sort-arrow">{{ openPositionsSort.dir === 'asc' ? '▲' : '▼' }}</span>
                   </th>
+                  <th class="num sortable-th" title="Precio Promedio de Compra: costo ponderado de todas tus compras abiertas de este ticker (no se mueve con ventas parciales)." @click="toggleSort(openPositionsSort, 'avgCost')">
+                    PPC
+                    <span v-if="openPositionsSort.key === 'avgCost'" class="sort-arrow">{{ openPositionsSort.dir === 'asc' ? '▲' : '▼' }}</span>
+                  </th>
                   <th class="num sortable-th" title="Precio en vivo: CEDEARs y Acciones argentinas (data912)" @click="toggleSort(openPositionsSort, 'livePrice')">
-                    Precio (ARS)
+                    Precio actual
                     <span v-if="openPositionsSort.key === 'livePrice'" class="sort-arrow">{{ openPositionsSort.dir === 'asc' ? '▲' : '▼' }}</span>
                   </th>
                   <th class="num sortable-th" title="Con ratio conocido, el USD se calcula con el precio real de la acción. Sin ratio, se aproxima con el CCL general (≈)." @click="toggleSort(openPositionsSort, 'marketValueARS')">
@@ -1291,9 +1295,16 @@ onUnmounted(() => {
                   <td class="num">{{ formatNum(p.quantity) }}</td>
                   <td class="num">
                     <div class="stacked-cell">
-                      <span class="stacked-line-dim">Costo ${{ formatMoney(p.avgCost) }}</span>
-                      <span>{{ p.livePrice != null ? `Actual $${formatMoney(p.livePrice)}` : 'Actual —' }}</span>
+                      <span>${{ formatMoney(p.avgCost) }}</span>
+                      <span class="stacked-line-dim">
+                        <template v-if="p.avgCostUSD != null">US${{ formatMoney(p.avgCostUSD) }}</template>
+                        <template v-else>US$ — <span title="Faltó cargar el CCL en alguna compra de este ticker">(sin CCL)</span></template>
+                      </span>
                     </div>
+                  </td>
+                  <td class="num">
+                    <span v-if="p.livePrice != null">${{ formatMoney(p.livePrice) }}</span>
+                    <span v-else class="stacked-line-dim">—</span>
                   </td>
                   <td class="num">
                     <div class="stacked-cell">
@@ -1330,11 +1341,13 @@ onUnmounted(() => {
             <div v-else class="empty-state">Ningún ticker coincide con "{{ openPositionsSearch }}".</div>
           </div>
           <div class="table-hint">
-            Precio en vivo para CEDEARs y Acciones argentinas (fuente: data912.com, cada 30s). En
-            "Valor actual" y "Rendimiento", la línea de arriba es en pesos y la de abajo en dólares.
-            Para CEDEARs, el dólar se calcula con el ratio real contra la acción (✓); sin ratio (o
-            para acciones argentinas) se aproxima con el CCL general (≈). Hacé click en un
-            encabezado para ordenar.
+            <strong>PPC</strong> (Precio Promedio de Compra): costo ponderado de todas tus compras
+            abiertas de ese ticker, recalculado con cada compra nueva. Una venta parcial reduce la
+            cantidad pero no mueve el PPC (es el mismo criterio que usa cualquier broker). Precio en
+            vivo para CEDEARs y Acciones argentinas (fuente: data912.com, cada 30s). En "Valor actual"
+            y "Rendimiento", la línea de arriba es en pesos y la de abajo en dólares. Para CEDEARs, el
+            dólar se calcula con el ratio real contra la acción (✓); sin ratio (o para acciones
+            argentinas) se aproxima con el CCL general (≈). Hacé click en un encabezado para ordenar.
           </div>
           <div v-if="argStocksError" class="ccl-hint">⚠️ {{ argStocksError }}</div>
         </div>
