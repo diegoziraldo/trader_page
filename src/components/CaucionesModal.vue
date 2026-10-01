@@ -40,7 +40,7 @@ function emptyForm() {
     currency: 'ARS',
     tna: '',
     broker: '',
-    feeType: 'PERCENT',
+    feeType: 'FIXED',
     feeValue: '',
     status: 'ACTIVA',
     notes: '',
@@ -303,10 +303,16 @@ onMounted(loadAll)
             </div>
             <div class="form-field">
               <label>Interés/comisión cobrado por el broker</label>
-              <select v-model="form.feeType">
-                <option value="PERCENT">% sobre el interés bruto</option>
-                <option value="FIXED">Monto fijo</option>
-              </select>
+              <!-- Solo monto fijo: si estás editando una caución vieja cargada
+                   como "% sobre el interés", se respeta tal cual se guardó
+                   (sin selector), para no cambiarle el tipo de cálculo sin que lo pidas. -->
+              <input
+                v-if="form.feeType === 'PERCENT'"
+                type="text"
+                value="% sobre el interés bruto (cargada así originalmente)"
+                disabled
+              >
+              <input v-else type="text" value="Monto fijo" disabled>
             </div>
             <div class="form-field">
               <label>{{ form.feeType === 'PERCENT' ? 'Comisión (%)' : `Comisión (${currencySymbol(form.currency)})` }}</label>
