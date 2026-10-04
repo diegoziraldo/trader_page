@@ -1301,11 +1301,18 @@ onUnmounted(() => {
                         <template v-else>US$ — <span title="Faltó cargar el CCL en alguna compra de este ticker">(sin CCL)</span></template>
                       </span>
                       <span
-                        v-if="p.assetType === 'CEDEAR' && p.ratio != null"
+                        v-if="p.assetType === 'CEDEAR' && p.ratio != null && p.avgCostUSD != null"
                         class="stacked-line-dim"
-                        title="PPC × ratio: cuánto te costó en pesos, expresado por 1 acción real (no por 1 CEDEAR). Compará esto contra el precio real de la acción para saber si entraste caro o barato en dólares."
+                        title="PPC en USD × ratio: cuánto te costó en dólares reales, expresado por 1 acción real (no por 1 CEDEAR) — calculado con el CCL de cada compra, no con el CCL de hoy. Compará esto contra el precio real de la acción para saber si entraste caro o barato en dólares."
                       >
-                        ≈ ${{ formatMoney(p.avgCost * p.ratio) }}/acción
+                        ≈ US${{ formatMoney(p.avgCostUSD * p.ratio) }}/acción
+                      </span>
+                      <span
+                        v-else-if="p.assetType === 'CEDEAR' && p.ratio != null"
+                        class="stacked-line-dim"
+                        title="Falta el CCL de alguna compra de este ticker, así que no se puede calcular el costo en dólares por acción."
+                      >
+                        US$ —/acción (sin CCL)
                       </span>
                     </div>
                   </td>
@@ -1350,7 +1357,10 @@ onUnmounted(() => {
           <div class="table-hint">
             <strong>PPC</strong> (Precio Promedio de Compra): costo ponderado de todas tus compras
             abiertas de ese ticker, recalculado con cada compra nueva. Una venta parcial reduce la
-            cantidad pero no mueve el PPC (es el mismo criterio que usa cualquier broker). Precio en
+            cantidad pero no mueve el PPC (es el mismo criterio que usa cualquier broker). Para
+            CEDEARs con ratio cargado, la tercera línea (US$.../acción) es tu PPC en dólares
+            multiplicado por el ratio: cuánto te costó en dólares reales el equivalente a 1 acción
+            completa, usando el CCL de cada compra (no el de hoy). Precio en
             vivo para CEDEARs y Acciones argentinas (fuente: data912.com, cada 30s). En "Valor actual"
             y "Rendimiento", la línea de arriba es en pesos y la de abajo en dólares. Para CEDEARs, el
             dólar se calcula con el ratio real contra la acción (✓); sin ratio (o para acciones
