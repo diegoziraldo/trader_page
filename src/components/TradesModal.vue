@@ -1300,6 +1300,13 @@ onUnmounted(() => {
                         <template v-if="p.avgCostUSD != null">US${{ formatMoney(p.avgCostUSD) }}</template>
                         <template v-else>US$ — <span title="Faltó cargar el CCL en alguna compra de este ticker">(sin CCL)</span></template>
                       </span>
+                      <span
+                        v-if="p.assetType === 'CEDEAR' && p.ratio != null"
+                        class="stacked-line-dim"
+                        title="PPC × ratio: cuánto te costó en pesos, expresado por 1 acción real (no por 1 CEDEAR). Compará esto contra el precio real de la acción para saber si entraste caro o barato en dólares."
+                      >
+                        ≈ ${{ formatMoney(p.avgCost * p.ratio) }}/acción
+                      </span>
                     </div>
                   </td>
                   <td class="num">
