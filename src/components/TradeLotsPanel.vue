@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, h } from 'vue'
 import { buildLotLedger, lotMatchesToCsv } from '../services/lotTracking'
 
 // Libro de lotes (PEPS/FIFO) por ticker: qué compra se vendió con cada venta,
@@ -55,6 +55,85 @@ const fmtDays = (n) => (n == null ? '—' : n === 0 ? 'hoy' : n === 1 ? '1 día'
 
 const STATUS_LABEL = { ABIERTO: 'Abierto', PARCIAL: 'Parcial', CERRADO: 'Cerrado' }
 
+// ---------- Identificación visual de lotes ----------
+// Cada lote tiene un número fijo (L1, L2...) y un color. El color ayuda a
+// seguir un lote de una tabla a otra, pero la etiqueta siempre está escrita,
+// así se entiende igual sin distinguir colores. Pasar el mouse por una
+// etiqueta resalta ese lote en todo el panel; un clic lo deja fijado.
+const PALETTE = ['#60a5fa', '#f472b6', '#34d399', '#fbbf24', '#a78bfa', '#fb923c', '#2dd4bf', '#f87171', '#a3e635', '#e879f9']
+const lotColor = (seq) => PALETTE[(seq - 1) % PALETTE.length]
+function rgba(hex, a) {
+  const n = parseInt(hex.slice(1), 16)
+  return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${a})`
+}
+const chipStyle = (seq) => ({
+  color: lotColor(seq),
+  background: rgba(lotColor(seq), 0.16),
+  borderColor: rgba(lotColor(seq), 0.55),
+})
+
+const hoverLot = ref(null)
+const pinnedLot = ref(null)
+const activeLot = computed(() => pinnedLot.value ?? hoverLot.value)
+const isFaded = (seq) => activeLot.value != null && activeLot.value !== seq
+const togglePin = (seq) => { pinnedLot.value = pinnedLot.value === seq ? null : seq }
+watch(selected, () => { hoverLot.value = null; pinnedLot.value = null })
+
+// Etiqueta "L3" con el color del lote (componente funcional, usa el estado de arriba).
+const LotChip = (props) =>
+  h('button', {
+    type: 'button',
+    class: ['lot-chip', { active: activeLot.value === props.seq, faded: isFaded(props.seq) }],
+    style: chipStyle(props.seq),
+    title: `Lote ${props.seq} — clic para fijar el resaltado`,
+    onMouseenter: () => { hoverLot.value = props.seq },
+    onMouseleave: () => { hoverLot.value = null },
+    onClick: () => togglePin(props.seq),
+  }, `L${props.seq}`)
+LotChip.props = ['seq']
+
+// Barra de un lote: lo que se vendió (rayado, con la venta que lo consumió) y lo que queda (sólido).
+function lotSegments(lot) {
+  const total = lot.qtyOriginal
+  const segs = lot.consumedBy.map((c) => ({
+    key: `v${c.saleSeq}-${c.saleId}`,
+    pct: (c.qty / total) * 100,
+    sold: true,
+    label: `V${c.saleSeq} · ${fmtQty(c.qty)}`,
+    short: `V${c.saleSeq}`,
+    title: `Venta V${c.saleSeq} del ${fmtDate(c.saleDate)}: ${fmtQty(c.qty)} u. a $${fmt(c.salePrice)}`,
+  }))
+  if (lot.qtyRemaining > 1e-9) {
+    segs.push({
+      key: 'left', pct: (lot.qtyRemaining / total) * 100, sold: false,
+      label: `${fmtQty(lot.qtyRemaining)} quedan`, short: fmtQty(lot.qtyRemaining), title: `Quedan ${fmtQty(lot.qtyRemaining)} u. abiertas`,
+    })
+  }
+  return segs
+}
+// Barra de una venta: de qué lotes salió, cada tramo con el color de su lote.
+function saleSegments(sale) {
+  const segs = sale.matches.map((m) => ({
+    key: `l${m.lotSeq}`,
+    seq: m.lotSeq,
+    pct: (m.qty / sale.qty) * 100,
+    label: `L${m.lotSeq} · ${fmtQty(m.qty)}`,
+    short: `L${m.lotSeq}`,
+    title: `${fmtQty(m.qty)} u. del lote L${m.lotSeq} (compra del ${fmtDate(m.lotDate)} a $${fmt(m.buyPrice)})`,
+  }))
+  if (sale.unmatchedQty > 0) {
+    segs.push({ key: 'x', seq: null, pct: (sale.unmatchedQty / sale.qty) * 100, label: 'sin lote', short: '!', title: 'Sin lote de compra asociado' })
+  }
+  return segs
+}
+const segStyle = (seg, color, hatched) => ({
+  flexBasis: `${Math.max(seg.pct, 0.5)}%`,
+  background: hatched
+    ? `repeating-linear-gradient(45deg, ${rgba(color, 0.38)} 0 4px, ${rgba(color, 0.14)} 4px 8px)`
+    : color,
+  color: hatched ? color : '#0b0f17',
+})
+
 function downloadCsv() {
   const csv = lotMatchesToCsv(Object.values(ledger.value.byTicker))
   const blob = new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8' })
@@ -75,8 +154,9 @@ function downloadCsv() {
       <div>
         <div class="lots-title">🔎 Trazabilidad por lotes (PEPS)</div>
         <div class="lots-sub">
-          Cada compra es un lote. Cada venta consume lotes del más viejo al más nuevo, y queda registrado
-          qué porción de qué lote se vendió.
+          Cada compra es un lote (L1, L2…) con su propio color. Cada venta (V1, V2…) consume lotes del más
+          viejo al más nuevo, y queda registrado qué porción de qué lote se vendió. Pasá el mouse por una
+          etiqueta para resaltar ese lote en todo el panel; con un clic queda fijado.
         </div>
       </div>
       <div class="lots-actions">
@@ -160,7 +240,12 @@ function downloadCsv() {
               </tr>
             </thead>
             <tbody>
-              <tr v-for="m in current.timeline" :key="m.tradeId">
+              <tr
+                v-for="m in current.timeline"
+                :key="m.tradeId"
+                class="fade-row"
+                :class="{ faded: activeLot != null && (m.operation === 'COMPRA' ? m.lotSeq !== activeLot : !m.lots.some((l) => l.seq === activeLot)) }"
+              >
                 <td>{{ fmtDate(m.date) }}</td>
                 <td>
                   <span class="badge" :class="m.operation === 'COMPRA' ? 'badge-buy' : 'badge-sell'">
@@ -171,8 +256,13 @@ function downloadCsv() {
                 <td class="num">${{ fmt(m.price) }}</td>
                 <td class="num strong">{{ fmtQty(m.runningQty) }}</td>
                 <td class="dim">
-                  <template v-if="m.operation === 'COMPRA'">abre un lote nuevo</template>
-                  <template v-else>consume {{ m.lotsTouched }} lote{{ m.lotsTouched === 1 ? '' : 's' }}</template>
+                  <template v-if="m.operation === 'COMPRA'">abre el lote <LotChip :seq="m.lotSeq" /></template>
+                  <template v-else>
+                    <span class="strong-dim">V{{ m.saleSeq }}</span> consume
+                    <template v-for="(l, i) in m.lots" :key="l.seq">
+                      <LotChip :seq="l.seq" /> {{ fmtQty(l.qty) }} u.<span v-if="i < m.lots.length - 1">, </span>
+                    </template>
+                  </template>
                 </td>
               </tr>
             </tbody>
@@ -194,12 +284,19 @@ function downloadCsv() {
                 <th class="num">Precio</th>
                 <th class="num" title="Precio + comisión, por unidad">Costo unit.</th>
                 <th>Estado</th>
-                <th>Se vendió en</th>
+                <th class="bar-col">Consumo del lote</th>
               </tr>
             </thead>
             <tbody>
-              <tr v-for="lot in current.lots" :key="lot.id" :class="{ 'row-closed': lot.status === 'CERRADO' }">
-                <td>{{ fmtDate(lot.date) }}</td>
+              <tr
+                v-for="lot in current.lots"
+                :key="lot.id"
+                class="fade-row"
+                :class="{ 'row-closed': lot.status === 'CERRADO', faded: isFaded(lot.seq) }"
+              >
+                <td class="lot-first" :style="{ boxShadow: `inset 3px 0 0 ${lotColor(lot.seq)}` }">
+                  <LotChip :seq="lot.seq" /> {{ fmtDate(lot.date) }}
+                </td>
                 <td class="num">{{ fmtQty(lot.qtyOriginal) }}</td>
                 <td class="num">{{ fmtQty(lot.qtySold) }}</td>
                 <td class="num strong">{{ fmtQty(lot.qtyRemaining) }}</td>
@@ -211,11 +308,24 @@ function downloadCsv() {
                 <td>
                   <span class="badge" :class="'badge-' + lot.status.toLowerCase()">{{ STATUS_LABEL[lot.status] }}</span>
                 </td>
-                <td class="dim">
-                  <div v-for="c in lot.consumedBy" :key="c.saleId">
-                    {{ fmtQty(c.qty) }} u. el {{ fmtDate(c.saleDate) }} a ${{ fmt(c.salePrice) }}
+                <td class="bar-col">
+                  <div class="seg-bar">
+                    <span
+                      v-for="seg in lotSegments(lot)"
+                      :key="seg.key"
+                      class="seg"
+                      :style="segStyle(seg, lotColor(lot.seq), seg.sold)"
+                      :title="seg.title"
+                    >{{ seg.pct >= 18 ? seg.label : seg.pct >= 7 ? seg.short : '' }}</span>
                   </div>
-                  <span v-if="!lot.consumedBy.length">—</span>
+                  <div class="dim small bar-legend">
+                    <template v-if="lot.consumedBy.length">
+                      <span v-for="c in lot.consumedBy" :key="c.saleId" class="legend-item">
+                        <b>V{{ c.saleSeq }}</b> {{ fmtQty(c.qty) }} u. · {{ fmtDate(c.saleDate) }} a ${{ fmt(c.salePrice) }}
+                      </span>
+                    </template>
+                    <span v-else>sin ventas</span>
+                  </div>
                 </td>
               </tr>
             </tbody>
@@ -238,12 +348,28 @@ function downloadCsv() {
               </tr>
             </thead>
             <tbody>
-              <tr v-for="s in current.sales" :key="s.id">
-                <td>{{ fmtDate(s.date) }}</td>
+              <tr
+                v-for="s in current.sales"
+                :key="s.id"
+                class="fade-row"
+                :class="{ faded: activeLot != null && !s.matches.some((m) => m.lotSeq === activeLot) }"
+              >
+                <td><span class="strong-dim">V{{ s.seq }}</span> {{ fmtDate(s.date) }}</td>
                 <td class="num">{{ fmtQty(s.qty) }}</td>
                 <td class="num">${{ fmt(s.price) }}</td>
                 <td>
-                  <div v-for="(m, i) in s.matches" :key="i" class="match-line">
+                  <div class="seg-bar seg-bar-sale">
+                    <span
+                      v-for="seg in saleSegments(s)"
+                      :key="seg.key"
+                      class="seg"
+                      :class="{ faded: seg.seq != null && isFaded(seg.seq) }"
+                      :style="seg.seq != null ? segStyle(seg, lotColor(seg.seq), false) : { flexBasis: seg.pct + '%', background: '#6b7280', color: '#0b0f17' }"
+                      :title="seg.title"
+                    >{{ seg.pct >= 18 ? seg.label : seg.pct >= 7 ? seg.short : '' }}</span>
+                  </div>
+                  <div v-for="(m, i) in s.matches" :key="i" class="match-line" :class="{ faded: isFaded(m.lotSeq) }">
+                    <LotChip :seq="m.lotSeq" />
                     <span class="strong">{{ fmtQty(m.qty) }} u.</span>
                     del lote del {{ fmtDate(m.lotDate) }}
                     <span class="dim">(compra a ${{ fmt(m.buyPrice) }} · {{ fmtDays(m.holdingDays) }})</span>
@@ -386,7 +512,61 @@ function downloadCsv() {
 
 .lots-foot { font-size: 11.5px; color: var(--text-dim); line-height: 1.6; }
 
+/* Resaltado cruzado entre tablas */
+.fade-row, .match-line, .seg { transition: opacity 0.15s; }
+.faded { opacity: 0.22; }
+.strong-dim { font-weight: 700; color: var(--text-dim); }
+.lot-first { white-space: nowrap; padding-left: 14px; }
+
+/* Barras de consumo */
+.bar-col { min-width: 230px; }
+.seg-bar {
+  display: flex;
+  width: 100%;
+  min-width: 170px;
+  height: 20px;
+  border-radius: 6px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  background: var(--panel);
+}
+.seg-bar-sale { margin-bottom: 6px; }
+.seg {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10.5px;
+  font-weight: 700;
+  overflow: hidden;
+  white-space: nowrap;
+  min-width: 3px;
+  border-right: 1px solid rgba(0, 0, 0, 0.25);
+}
+.seg:last-child { border-right: none; }
+.bar-legend { margin-top: 5px; display: flex; flex-direction: column; gap: 1px; line-height: 1.45; }
+.legend-item b { color: var(--text-dim); }
+
 @media (max-width: 760px) {
   .lots-panel { padding: 14px 12px; }
 }
+</style>
+
+<style>
+.lots-panel .lot-chip {
+  display: inline-block;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1;
+  padding: 3px 7px;
+  margin-right: 4px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  vertical-align: baseline;
+  transition: opacity 0.15s, transform 0.1s;
+}
+.lots-panel .lot-chip:hover { transform: translateY(-1px); }
+.lots-panel .lot-chip.active { outline: 2px solid currentColor; outline-offset: 1px; }
+.lots-panel .lot-chip.faded { opacity: 0.3; }
 </style>

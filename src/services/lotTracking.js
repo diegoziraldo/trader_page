@@ -98,6 +98,7 @@ export function buildLotLedger(trades, opts = {}) {
     if (t.operation === 'COMPRA') {
       const lot = {
         id: t.id,
+        seq: ledger.lots.length + 1, // L1, L2, L3... en orden de compra
         date: t.date,
         price,
         fee,
@@ -116,6 +117,7 @@ export function buildLotLedger(trades, opts = {}) {
       ledger.timeline.push({
         tradeId: t.id, date: t.date, operation: 'COMPRA', qty, price,
         runningQty: ledger.runningQty, portfolioId: t.portfolioId ?? null,
+        lotSeq: lot.seq,
       })
       continue
     }
@@ -123,6 +125,7 @@ export function buildLotLedger(trades, opts = {}) {
     // VENTA: consume lotes del más viejo al más nuevo.
     const netUnit = (qty * price - fee) / qty
     const netUnitUSD = ccl ? (qty * price - fee) / ccl / qty : null
+    const saleSeq = ledger.sales.length + 1 // V1, V2, V3... en orden de venta
     let needed = qty
     const matches = []
 
@@ -137,6 +140,7 @@ export function buildLotLedger(trades, opts = {}) {
       const plUSD = netUnitUSD != null && lot.unitCostUSD != null ? take * (netUnitUSD - lot.unitCostUSD) : null
       matches.push({
         lotId: lot.id,
+        lotSeq: lot.seq,
         lotDate: lot.date,
         qty: take,
         buyPrice: lot.price,
@@ -147,7 +151,7 @@ export function buildLotLedger(trades, opts = {}) {
         plUSD,
         holdingDays: daysBetween(lot.date, t.date),
       })
-      lot.consumedBy.push({ saleId: t.id, saleDate: t.date, qty: take, salePrice: price })
+      lot.consumedBy.push({ saleId: t.id, saleSeq, saleDate: t.date, qty: take, salePrice: price })
     }
 
     const unmatched = needed > EPS ? r6(needed) : 0
@@ -168,6 +172,7 @@ export function buildLotLedger(trades, opts = {}) {
     ledger.runningQty = Math.max(0, r6(ledger.runningQty - qty))
     ledger.sales.push({
       id: t.id,
+      seq: saleSeq,
       date: t.date,
       qty,
       price,
@@ -184,6 +189,8 @@ export function buildLotLedger(trades, opts = {}) {
       tradeId: t.id, date: t.date, operation: 'VENTA', qty, price,
       runningQty: ledger.runningQty, portfolioId: t.portfolioId ?? null,
       lotsTouched: matches.length,
+      saleSeq,
+      lots: matches.map((m) => ({ seq: m.lotSeq, qty: m.qty })),
     })
   }
 
@@ -227,7 +234,7 @@ export function buildLotLedger(trades, opts = {}) {
 export function lotMatchesToCsv(ledgers) {
   const num = (n, d = 2) => (n == null ? '' : Number(n).toFixed(d).replace('.', ','))
   const header = [
-    'Ticker', 'Fecha venta', 'Fecha compra (lote)', 'Cantidad', 'Precio compra', 'Costo unitario (c/comisión)',
+    'Ticker', 'Venta Nº', 'Fecha venta', 'Lote Nº', 'Fecha compra (lote)', 'Cantidad', 'Precio compra', 'Costo unitario (c/comisión)',
     'Precio venta', 'Neto unitario venta', 'Resultado ARS', 'Resultado USD', 'Días en cartera',
   ]
   const rows = []
@@ -235,7 +242,7 @@ export function lotMatchesToCsv(ledgers) {
     for (const s of L.sales) {
       for (const m of s.matches) {
         rows.push([
-          L.ticker, s.date, m.lotDate, num(m.qty, 6), num(m.buyPrice), num(m.buyUnitCost, 4),
+          L.ticker, `V${s.seq}`, s.date, `L${m.lotSeq}`, m.lotDate, num(m.qty, 6), num(m.buyPrice), num(m.buyUnitCost, 4),
           num(m.sellPrice), num(m.sellUnitNet, 4), num(m.pl), num(m.plUSD), m.holdingDays ?? '',
         ])
       }
