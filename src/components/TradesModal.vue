@@ -10,6 +10,8 @@ import {
 import { getPortfolios } from '../services/portfoliosService'
 import { syncPortfolioFromTrades } from '../services/portfolioSyncService'
 import { PORTFOLIO_ASSET_BY_TICKER } from '../data/argentinePortfolioAssets'
+import { buildLotLedger } from '../services/lotTracking'
+import TradeLotsPanel from './TradeLotsPanel.vue'
 
 const emit = defineEmits(['close'])
 
@@ -530,12 +532,24 @@ function formatDays(n) {
   return `${n} días`
 }
 
+// Libro de lotes (PEPS) derivado de los trades: se recalcula solo al
+// cargar/editar/borrar una operación.
+const lotLedger = computed(() => buildLotLedger(trades.value))
+const lotsPanel = ref(null)
+function showLots(ticker) {
+  lotsPanel.value?.show(ticker)
+}
+
 // Antigüedad de una posición abierta: como puede estar armada con varias
-// compras en fechas distintas, usamos el promedio ponderado por cantidad
-// (mismo criterio que el costo promedio) en vez de una sola fecha. Si hubo
-// ventas parciales no sabemos qué lote puntual quedó (no hay tracking FIFO),
-// así que esto es una aproximación razonable, no un dato exacto.
+// compras en fechas distintas, usamos el promedio ponderado por cantidad de
+// los lotes que SIGUEN abiertos (PEPS): las unidades ya vendidas no cuentan,
+// así que es la antigüedad real de lo que tenés hoy. Solo si el libro de
+// lotes no tuviera datos de ese ticker se cae a promediar todas las compras.
 function getAvgHoldingDays(ticker) {
+  const open = lotLedger.value.byTicker[ticker]?.open
+  if (open && open.qty > 0 && open.avgAgeDays != null) {
+    return { days: open.avgAgeDays, lots: open.lotsCount }
+  }
   const buys = trades.value.filter((t) => t.ticker === ticker && t.operation === 'COMPRA' && t.quantity > 0)
   if (!buys.length) return null
   let totalQty = 0
@@ -1275,9 +1289,12 @@ onUnmounted(() => {
                 >
                   <td>
                     <div class="ticker-cell">{{ p.ticker }}</div>
-                    <div v-if="p.holdingDays != null" class="ratio-subrow" :title="p.holdingLots > 1 ? `Promedio ponderado por cantidad entre ${p.holdingLots} compras. No contempla ventas parciales (sin tracking de lotes).` : ''">
+                    <div v-if="p.holdingDays != null" class="ratio-subrow" :title="p.holdingLots > 1 ? `Promedio ponderado por cantidad de los ${p.holdingLots} lotes que seguís teniendo abiertos (las unidades ya vendidas no cuentan).` : ''">
                       <span>📅 Hace {{ formatDays(p.holdingDays) }}</span>
-                      <span v-if="p.holdingLots > 1" class="stacked-line-dim">(promedio, {{ p.holdingLots }} compras)</span>
+                      <span v-if="p.holdingLots > 1" class="stacked-line-dim">(promedio, {{ p.holdingLots }} lotes abiertos)</span>
+                    </div>
+                    <div class="ratio-subrow">
+                      <button type="button" class="lots-link" title="Ver de qué compras sale esta posición y qué lote consumió cada venta" @click="showLots(p.ticker)">🔎 Ver lotes</button>
                     </div>
                     <div v-if="p.assetType === 'CEDEAR'" class="ratio-subrow">
                       <span>Ratio:</span>
@@ -1368,6 +1385,9 @@ onUnmounted(() => {
           </div>
           <div v-if="argStocksError" class="ccl-hint">⚠️ {{ argStocksError }}</div>
         </div>
+
+        <!-- Trazabilidad por lotes (PEPS): qué compra se vendió con cada venta -->
+        <TradeLotsPanel v-if="trades.length" ref="lotsPanel" :trades="trades" :by-symbol="summary.bySymbol" />
 
         <!-- Resumen por ticker (histórico, incluye posiciones cerradas) -->
         <div v-if="summary.bySymbol.length" class="by-symbol-section">
@@ -1949,6 +1969,20 @@ onUnmounted(() => {
   border-radius: 999px;
   font-size: 11.5px;
   font-weight: 700;
+}
+
+.lots-link {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--blue, #60a5fa);
+  font-size: 11.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.lots-link:hover {
+  text-decoration: underline;
 }
 
 .field-hint {
