@@ -1296,7 +1296,7 @@ onUnmounted(() => {
                       <span v-if="p.holdingLots > 1" class="stacked-line-dim">(promedio, {{ p.holdingLots }} lotes abiertos)</span>
                     </div>
                     <div class="ratio-subrow">
-                      <button type="button" class="lots-link" title="Ver de qué compras sale esta posición y qué lote consumió cada venta" @click="showLots(p.ticker)">Ver lotes</button>
+                      <button type="button" class="lots-link" title="Ver de qué compras sale esta posición y qué lote consumió cada venta" @click="showLots(p.ticker)">🔎 Ver lotes</button>
                     </div>
                     <div v-if="p.assetType === 'CEDEAR'" class="ratio-subrow">
                       <span>Ratio:</span>
