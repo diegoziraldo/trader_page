@@ -30,6 +30,12 @@
 //    el excedente queda marcado en `unmatchedQty`; la posición se acota en 0
 //    igual que en "Posiciones abiertas".
 //
+// Carteras: cada cartera lleva su propio libro (buildPortfolioLedgers). Una
+// venta asignada a una cartera solo consume lotes comprados en esa misma
+// cartera; los trades sin cartera forman su propio grupo ("none"). Si
+// vendés en una cartera algo que compraste en otra, esa venta queda marcada
+// como inconsistente en la cartera donde la cargaste.
+//
 // Nota: PEPS es el método elegido acá para la trazabilidad. El PPC (costo
 // promedio) de "Posiciones abiertas" sigue siendo el de siempre; ambos
 // métodos conservan el costo total (resultado realizado + costo abierto), solo
@@ -228,21 +234,69 @@ export function buildLotLedger(trades, opts = {}) {
   return { byTicker, tickers, asOf }
 }
 
+// Un libro de lotes por cartera. Devuelve { byKey, keys, asOf } donde cada
+// entrada de byKey es { key, portfolioId, ledger } (key = id de la cartera
+// como texto, o "none" para los trades sin cartera).
+export function buildPortfolioLedgers(trades, opts = {}) {
+  const asOf = opts.asOf || todayLocalISO()
+  const buckets = new Map()
+  for (const t of trades) {
+    const key = t.portfolioId == null ? 'none' : String(t.portfolioId)
+    if (!buckets.has(key)) buckets.set(key, [])
+    buckets.get(key).push(t)
+  }
+  const byKey = {}
+  for (const [key, list] of buckets) {
+    byKey[key] = { key, portfolioId: key === 'none' ? null : Number(key), ledger: buildLotLedger(list, { asOf }) }
+  }
+  return { byKey, keys: Object.keys(byKey), asOf }
+}
+
+// Lo que sigue abierto de cada ticker sumando todas las carteras (lo usa la
+// tabla "Posiciones abiertas", que es general): cantidad, costo, antigüedad
+// ponderada solo de los lotes abiertos y cuánto hay en cada cartera.
+export function openByTicker(groups) {
+  const out = {}
+  for (const g of Object.values(groups.byKey)) {
+    for (const L of Object.values(g.ledger.byTicker)) {
+      for (const lot of L.lots) {
+        if (lot.qtyRemaining <= EPS) continue
+        const o = (out[L.ticker] ??= {
+          ticker: L.ticker, qty: 0, cost: 0, ageSum: 0, lotsCount: 0, oldestLotDate: null, byPortfolio: {},
+        })
+        o.qty = r6(o.qty + lot.qtyRemaining)
+        o.cost += lot.qtyRemaining * lot.unitCost
+        o.ageSum += (daysBetween(lot.date, groups.asOf) ?? 0) * lot.qtyRemaining
+        o.lotsCount += 1
+        if (!o.oldestLotDate || lot.date < o.oldestLotDate) o.oldestLotDate = lot.date
+        o.byPortfolio[g.key] = r6((o.byPortfolio[g.key] || 0) + lot.qtyRemaining)
+      }
+    }
+  }
+  for (const o of Object.values(out)) {
+    o.avgAgeDays = Math.round(o.ageSum / o.qty)
+    o.unitCost = o.cost / o.qty
+    delete o.ageSum
+  }
+  return out
+}
+
 // CSV (separador ";" y coma decimal, para abrirlo directo en Excel es-AR) con
 // una fila por cada cruce venta ↔ lote: sirve para respaldar el costo de cada
 // venta ante un contador.
-export function lotMatchesToCsv(ledgers) {
+// entries: [{ cartera: 'Nombre', ledger: <libro de un ticker> }]
+export function lotMatchesToCsv(entries) {
   const num = (n, d = 2) => (n == null ? '' : Number(n).toFixed(d).replace('.', ','))
   const header = [
-    'Ticker', 'Venta Nº', 'Fecha venta', 'Lote Nº', 'Fecha compra (lote)', 'Cantidad', 'Precio compra', 'Costo unitario (c/comisión)',
+    'Cartera', 'Ticker', 'Venta Nº', 'Fecha venta', 'Lote Nº', 'Fecha compra (lote)', 'Cantidad', 'Precio compra', 'Costo unitario (c/comisión)',
     'Precio venta', 'Neto unitario venta', 'Resultado ARS', 'Resultado USD', 'Días en cartera',
   ]
   const rows = []
-  for (const L of ledgers) {
+  for (const { cartera, ledger: L } of entries) {
     for (const s of L.sales) {
       for (const m of s.matches) {
         rows.push([
-          L.ticker, `V${s.seq}`, s.date, `L${m.lotSeq}`, m.lotDate, num(m.qty, 6), num(m.buyPrice), num(m.buyUnitCost, 4),
+          cartera, L.ticker, `V${s.seq}`, s.date, `L${m.lotSeq}`, m.lotDate, num(m.qty, 6), num(m.buyPrice), num(m.buyUnitCost, 4),
           num(m.sellPrice), num(m.sellUnitNet, 4), num(m.pl), num(m.plUSD), m.holdingDays ?? '',
         ])
       }

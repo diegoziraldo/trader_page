@@ -10,7 +10,7 @@ import {
 import { getPortfolios } from '../services/portfoliosService'
 import { syncPortfolioFromTrades } from '../services/portfolioSyncService'
 import { PORTFOLIO_ASSET_BY_TICKER } from '../data/argentinePortfolioAssets'
-import { buildLotLedger } from '../services/lotTracking'
+import { buildPortfolioLedgers, openByTicker } from '../services/lotTracking'
 import TradeLotsPanel from './TradeLotsPanel.vue'
 
 const emit = defineEmits(['close'])
@@ -532,9 +532,11 @@ function formatDays(n) {
   return `${n} días`
 }
 
-// Libro de lotes (PEPS) derivado de los trades: se recalcula solo al
-// cargar/editar/borrar una operación.
-const lotLedger = computed(() => buildLotLedger(trades.value))
+// Libros de lotes (PEPS), uno por cartera, derivados de los trades: se
+// recalculan solos al cargar/editar/borrar una operación. `openAgg` suma lo
+// que sigue abierto de cada ticker en todas las carteras (esta tabla es general).
+const lotGroups = computed(() => buildPortfolioLedgers(trades.value))
+const openAgg = computed(() => openByTicker(lotGroups.value))
 const lotsPanel = ref(null)
 function showLots(ticker) {
   lotsPanel.value?.show(ticker)
@@ -546,7 +548,7 @@ function showLots(ticker) {
 // así que es la antigüedad real de lo que tenés hoy. Solo si el libro de
 // lotes no tuviera datos de ese ticker se cae a promediar todas las compras.
 function getAvgHoldingDays(ticker) {
-  const open = lotLedger.value.byTicker[ticker]?.open
+  const open = openAgg.value[ticker]
   if (open && open.qty > 0 && open.avgAgeDays != null) {
     return { days: open.avgAgeDays, lots: open.lotsCount }
   }
@@ -1294,7 +1296,7 @@ onUnmounted(() => {
                       <span v-if="p.holdingLots > 1" class="stacked-line-dim">(promedio, {{ p.holdingLots }} lotes abiertos)</span>
                     </div>
                     <div class="ratio-subrow">
-                      <button type="button" class="lots-link" title="Ver de qué compras sale esta posición y qué lote consumió cada venta" @click="showLots(p.ticker)">🔎 Ver lotes</button>
+                      <button type="button" class="lots-link" title="Ver de qué compras sale esta posición y qué lote consumió cada venta" @click="showLots(p.ticker)">Ver lotes</button>
                     </div>
                     <div v-if="p.assetType === 'CEDEAR'" class="ratio-subrow">
                       <span>Ratio:</span>
@@ -1387,7 +1389,7 @@ onUnmounted(() => {
         </div>
 
         <!-- Trazabilidad por lotes (PEPS): qué compra se vendió con cada venta -->
-        <TradeLotsPanel v-if="trades.length" ref="lotsPanel" :trades="trades" :by-symbol="summary.bySymbol" />
+        <TradeLotsPanel v-if="trades.length" ref="lotsPanel" :trades="trades" :by-symbol="summary.bySymbol" :portfolios="portfolios" />
 
         <!-- Resumen por ticker (histórico, incluye posiciones cerradas) -->
         <div v-if="summary.bySymbol.length" class="by-symbol-section">
