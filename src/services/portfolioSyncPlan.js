@@ -9,11 +9,18 @@
 // recibe las funciones de lectura/escritura por parámetro) para poder
 // probarla sin navegador ni base de datos real.
 //
+// Una sola fuente de verdad: las cantidades y el costo salen del MISMO motor
+// que usa la trazabilidad por lotes (lotTracking.js), que a su vez replica la
+// fórmula de "Posiciones abiertas". Antes esta sincronización calculaba su
+// propio promedio (de todas las compras históricas, sin comisiones y sin
+// descontar lo ya vendido), y la cartera mostraba un costo distinto al PPC.
+//
 // Reglas:
-//  - Tenencia neta de un ticker = COMPRAs - VENTAs. Precio promedio =
-//    promedio ponderado de las compras. Fecha de alta de la posición =
-//    fecha de la primera compra (para que el gráfico de evolución arranque
-//    ahí, no desde hoy).
+//  - Cantidad = lo que sigue abierto en esa cartera (compras − ventas, nunca
+//    negativa). Precio promedio = costo promedio móvil (PPC) con comisiones:
+//    las compras lo recalculan, las ventas reducen la cantidad pero no lo
+//    mueven. Fecha de alta de la posición = fecha de la primera compra (para
+//    que el gráfico de evolución arranque ahí, no desde hoy).
 //  - Sector: el del trade más reciente que lo tenga cargado (distinto de
 //    "General"); si ninguno, el del catálogo (argentinePortfolioAssets.js);
 //    si tampoco, "General".
@@ -24,59 +31,68 @@
 //    si un ticker (ej. AAPL) tiene compras repartidas entre varias carteras
 //    y además compras viejas sin cartera, cada cartera tiene que mostrar
 //    SOLO lo que es suyo, nunca el total sumado de todas.
-//  - Tenencia neta > 0: crea la posición si no existe, o la actualiza SOLO
-//    si algo realmente cambió (cantidad, precio promedio, o sector si
-//    estaba en "General"). Tenencia neta <= 0 y la posición existe: se
-//    borra (vendida por completo).
+//  - Cantidad > 0: crea la posición si no existe, o la actualiza SOLO si algo
+//    realmente cambió (cantidad, precio promedio, o sector/ratio si faltaban).
+//    Cantidad 0 y la posición existe: se borra (vendida por completo).
 //  - Con `tickers` (sincronización acotada, al guardar/editar/borrar un
 //    trade puntual) solo se revisan esos tickers; si alguno ya no tiene
 //    ningún trade y tenía posición, la posición se borra (caso: borraste
 //    su único trade).
 
 import { PORTFOLIO_ASSET_BY_TICKER } from '../data/argentinePortfolioAssets.js'
+import { buildLotLedger } from './lotTracking.js'
 
-export function planSync(allTrades, positions, portfolioId, opts = {}) {
-  const { tickers = null } = opts
+// Lo que "debería" tener cada ticker de una cartera según sus trades: es la
+// misma cuenta que usa planSync y que usa el control de datos para detectar
+// posiciones desfasadas.
+export function expectedPositions(allTrades, portfolioId, tickers = null) {
   const scoped = Array.isArray(tickers)
-
   const relevant = allTrades.filter((t) => {
     if (scoped && !tickers.includes(t.ticker)) return false
     return t.portfolioId != null && String(t.portfolioId) === String(portfolioId)
   })
 
-  const byTicker = {}
-  for (const t of relevant) {
-    if (!byTicker[t.ticker]) byTicker[t.ticker] = { assetType: t.assetType, buys: [], netQty: 0, sector: null }
-    const entry = byTicker[t.ticker]
-    if (t.sector && t.sector !== 'General') entry.sector = t.sector
-    const qty = Number(t.quantity)
-    if (t.operation === 'COMPRA') {
-      entry.buys.push({ date: t.date, qty, price: Number(t.price) })
-      entry.netQty += qty
-    } else {
-      entry.netQty -= qty
-    }
+  const sectorByTicker = {}
+  for (const t of [...relevant].sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0))) {
+    if (t.sector && t.sector !== 'General') sectorByTicker[t.ticker] = t.sector
   }
 
+  const ledger = buildLotLedger(relevant)
+  const out = {}
+  for (const [ticker, L] of Object.entries(ledger.byTicker)) {
+    out[ticker] = {
+      ticker,
+      assetType: L.assetType,
+      qty: L.open.qty,
+      avgCost: L.ppp.avgCost,
+      firstBuyDate: L.lots[0]?.date ?? null,
+      sector: sectorByTicker[ticker] || null,
+      hasBuys: L.lots.length > 0,
+    }
+  }
+  return out
+}
+
+export function planSync(allTrades, positions, portfolioId, opts = {}) {
+  const { tickers = null } = opts
+  const scoped = Array.isArray(tickers)
+  const expected = expectedPositions(allTrades, portfolioId, tickers)
   const existingByTicker = new Map(positions.map((p) => [p.ticker, p]))
   const actions = []
 
-  for (const [ticker, data] of Object.entries(byTicker)) {
+  for (const [ticker, data] of Object.entries(expected)) {
     const existing = existingByTicker.get(ticker)
-    const totalCost = data.buys.reduce((acc, b) => acc + b.qty * b.price, 0)
-    const totalQtyBought = data.buys.reduce((acc, b) => acc + b.qty, 0)
-    const avgPrice = totalQtyBought > 0 ? totalCost / totalQtyBought : null
-    const knownSector = data.sector || PORTFOLIO_ASSET_BY_TICKER[ticker]?.sector || null
+    const catalogAsset = PORTFOLIO_ASSET_BY_TICKER[ticker]
+    const knownSector = data.sector || catalogAsset?.sector || null
 
     if (existing) {
-      if (data.netQty > 0) {
+      if (data.qty > 0) {
         const payload = {}
-        if (Math.abs(Number(existing.quantity) - data.netQty) > 1e-9) payload.quantity = data.netQty
-        if (avgPrice != null && Math.abs(Number(existing.avgPrice) - avgPrice) > 1e-6) payload.avgPrice = avgPrice
+        if (Math.abs(Number(existing.quantity) - data.qty) > 1e-9) payload.quantity = data.qty
+        if (Math.abs(Number(existing.avgPrice) - data.avgCost) > 1e-6) payload.avgPrice = data.avgCost
         if (existing.sector === 'General' && knownSector) payload.sector = knownSector
         // Completa ratio/subyacente si la posición no los tenía cargados
         // (ej. se creó antes de que el catálogo tuviera este ticker).
-        const catalogAsset = PORTFOLIO_ASSET_BY_TICKER[ticker]
         if (existing.assetType === 'CEDEAR' && existing.ratio == null && catalogAsset?.ratio != null) {
           payload.ratio = catalogAsset.ratio
         }
@@ -90,22 +106,20 @@ export function planSync(allTrades, positions, portfolioId, opts = {}) {
       continue
     }
 
-    if (!(data.netQty > 0) || !data.buys.length) {
+    if (!(data.qty > 0) || !data.hasBuys) {
       actions.push({ type: 'skip', ticker })
       continue
     }
 
-    const earliestBuyDate = data.buys.reduce((min, b) => (b.date < min ? b.date : min), data.buys[0].date)
-    const catalogAsset = PORTFOLIO_ASSET_BY_TICKER[ticker]
     actions.push({
       type: 'create',
       ticker,
       payload: {
         assetType: data.assetType,
         ticker,
-        quantity: data.netQty,
-        avgPrice,
-        createdAt: earliestBuyDate,
+        quantity: data.qty,
+        avgPrice: data.avgCost,
+        createdAt: data.firstBuyDate,
         sector: knownSector || undefined,
         // Ratio y subyacente: solo tienen sentido para CEDEARs, y solo si
         // el catálogo los tiene cargados (igual criterio que el sector: si
@@ -120,7 +134,7 @@ export function planSync(allTrades, positions, portfolioId, opts = {}) {
   // posición (ej. borraste el único trade de ese ticker en esta cartera).
   if (scoped) {
     for (const ticker of tickers) {
-      if (byTicker[ticker]) continue
+      if (expected[ticker]) continue
       const existing = existingByTicker.get(ticker)
       if (existing) actions.push({ type: 'delete', id: existing.id, ticker })
     }

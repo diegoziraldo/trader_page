@@ -16,6 +16,7 @@ import { PORTFOLIO_ASSET_BY_TICKER } from '../data/argentinePortfolioAssets'
 import { recordSnapshot, seedFromInception, getDailySeries, getMonthlySeries } from '../services/local/portfolioHistoryLocal'
 import Chart from 'chart.js/auto'
 import { syncPortfolioFromTrades } from '../services/portfolioSyncService'
+import DataAuditPanel from './DataAuditPanel.vue'
 
 const emit = defineEmits(['close'])
 
@@ -254,6 +255,7 @@ async function removePositionRow(pos) {
 // el gráfico de evolución arranca desde ahí, no desde hoy) y el costo
 // promedio ponderado de las compras como precio promedio.
 const importing = ref(false)
+const showAudit = ref(false)
 const importResult = ref(null)
 
 // =========================================================
@@ -811,7 +813,7 @@ function onOverlayClick(e) {
         <div class="pf-title">
           <span class="pf-icon">🧩</span>
           Armado de Carteras
-          <span class="build-tag" title="Si este número no cambió después de un deploy nuevo, el navegador está sirviendo el JS viejo (caché) y hay que forzar una recarga.">build 2026-10-01.1</span>
+          <span class="build-tag" title="Si este número no cambió después de un deploy nuevo, el navegador está sirviendo el JS viejo (caché) y hay que forzar una recarga.">build 2026-10-22.1</span>
         </div>
         <button class="close-btn" @click="close" title="Cerrar">✕</button>
       </div>
@@ -956,7 +958,11 @@ function onOverlayClick(e) {
                     {{ fixSectorsResult.fixed }} corregida(s)
                     <template v-if="fixSectorsResult.noMatch"> · {{ fixSectorsResult.noMatch }} sin match en el catálogo</template>
                   </span>
+                  <button type="button" class="btn-secondary btn-small" :aria-expanded="showAudit ? 'true' : 'false'" @click="showAudit = !showAudit">
+                    🩺 Control de datos
+                  </button>
                 </div>
+                <DataAuditPanel v-if="showAudit" :portfolios="portfolios" @fixed="loadPositions" />
 
                 <!-- Diversificación -->
                 <div v-if="positions.length" class="diversification-section">

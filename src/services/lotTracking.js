@@ -36,6 +36,11 @@
 // vendés en una cartera algo que compraste en otra, esa venta queda marcada
 // como inconsistente en la cartera donde la cargaste.
 //
+// Costo promedio (PPC): cada libro también lleva `ppp` (cantidad, costo promedio móvil con
+// comisiones, resultado realizado por promedio), con la misma fórmula que "Posiciones
+// abiertas". Así hay UN solo motor: la sincronización de carteras y el control de datos usan
+// este costo en vez de recalcularlo cada uno por su cuenta.
+//
 // Nota: PEPS es el método elegido acá para la trazabilidad. El PPC (costo
 // promedio) de "Posiciones abiertas" sigue siendo el de siempre; ambos
 // métodos conservan el costo total (resultado realizado + costo abierto), solo
@@ -81,6 +86,9 @@ function newLedger(trade) {
     timeline: [],
     runningQty: 0,
     realized: { pl: 0, plUSD: 0, usdIncomplete: false, matchedQty: 0 },
+    // Costo promedio móvil (PPC), con la MISMA fórmula que "Posiciones abiertas": las compras
+    // (con comisión) lo recalculan, las ventas reducen la cantidad pero no lo mueven.
+    ppp: { qty: 0, avgCost: 0, avgCostUSD: 0, realized: 0, realizedUSD: 0, usdIncomplete: false },
     unmatchedQty: 0,
     inconsistent: false,
     open: null,
@@ -119,6 +127,16 @@ export function buildLotLedger(trades, opts = {}) {
         status: 'ABIERTO',
       }
       ledger.lots.push(lot)
+      {
+        const p = ledger.ppp
+        if (ccl == null) p.usdIncomplete = true
+        const newQty = p.qty + qty
+        const newCost = p.avgCost * p.qty + qty * price + fee
+        const newCostUSD = p.avgCostUSD * p.qty + (ccl != null ? (qty * price + fee) / ccl : 0)
+        p.avgCost = newQty > 0 ? newCost / newQty : 0
+        p.avgCostUSD = newQty > 0 ? newCostUSD / newQty : 0
+        p.qty = newQty
+      }
       ledger.runningQty = r6(ledger.runningQty + qty)
       ledger.timeline.push({
         tradeId: t.id, date: t.date, operation: 'COMPRA', qty, price,
@@ -131,6 +149,13 @@ export function buildLotLedger(trades, opts = {}) {
     // VENTA: consume lotes del más viejo al más nuevo.
     const netUnit = (qty * price - fee) / qty
     const netUnitUSD = ccl ? (qty * price - fee) / ccl / qty : null
+    {
+      const p = ledger.ppp
+      if (ccl == null) p.usdIncomplete = true
+      p.realized += qty * (price - p.avgCost) - fee
+      p.realizedUSD += ccl != null ? qty * (price / ccl - p.avgCostUSD) - fee / ccl : 0
+      p.qty = Math.max(0, p.qty - qty)
+    }
     const saleSeq = ledger.sales.length + 1 // V1, V2, V3... en orden de venta
     let needed = qty
     const matches = []
@@ -222,6 +247,14 @@ export function buildLotLedger(trades, opts = {}) {
       lotsCount: openLots.length,
     }
     if (ledger.realized.usdIncomplete) ledger.realized.plUSD = null
+    const pp = ledger.ppp
+    pp.qty = r6(pp.qty)
+    pp.invested = pp.avgCost * pp.qty
+    pp.investedUSD = pp.usdIncomplete ? null : pp.avgCostUSD * pp.qty
+    if (pp.usdIncomplete) {
+      pp.avgCostUSD = null
+      pp.realizedUSD = null
+    }
   }
 
   // Abiertos primero (por cantidad de lotes abiertos), después cerrados; alfabético.
