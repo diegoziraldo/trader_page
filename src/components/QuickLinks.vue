@@ -31,7 +31,13 @@
     >
       <span>🧩 Carteras</span>
     </button>
-
+  <button
+    class="quick-link quick-link-strategy-lab"
+    :style="{ backgroundColor: '#172554', color: '#93c5fd' }"
+    @click="$emit('open-strategy-lab')"
+  >
+    <span>🧪 Strategy Lab</span>
+  </button>
     <a
       v-for="link in links"
       :key="link.name"
@@ -50,7 +56,7 @@
 </template>
 
 <script setup>
-defineEmits(['open-trades', 'open-journal', 'open-cauciones', 'open-carteras'])
+defineEmits(['open-trades', 'open-journal', 'open-cauciones', 'open-carteras','open-strategy-lab'])
 
 const links = [
   {

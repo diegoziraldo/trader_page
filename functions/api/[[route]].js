@@ -6,6 +6,7 @@ import * as trades from '../_lib/trades.js';
 import * as journal from '../_lib/journal.js';
 import * as cauciones from '../_lib/cauciones.js';
 import * as portfolios from '../_lib/portfolios.js';
+import { strategyLab } from '../_lib/strategyLabRoutes.js';
 
 const app = new Hono().basePath('/api');
 
@@ -212,5 +213,5 @@ app.delete(
     return c.body(null, 204);
   })
 );
-
+app.route('/strategy-lab', strategyLab);
 export const onRequest = (context) => app.fetch(context.request, context.env, context);
