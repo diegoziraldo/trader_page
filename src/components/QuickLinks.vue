@@ -58,38 +58,7 @@
 <script setup>
 defineEmits(['open-trades', 'open-journal', 'open-cauciones', 'open-carteras','open-strategy-lab'])
 
-const links = [
-  {
-    name: 'IOL',
-    url: 'https://micuenta.invertironline.com/ingresar?url=https://iol.invertironline.com/MiCuenta/Operaciones',
-    bgColor: '#1e1b4b', // Color de fondo personalizado
-    textColor: '#818cf8' // Color de letra personalizado
-  },
-  {
-    name: 'Dólar',
-    url: 'https://dolarhoy.com/',
-    bgColor: '#064e3b',
-    textColor: '#34d399'
-  },
-  {
-    name: 'Cocos',
-    url: 'https://app.cocos.capital/sign-in',
-    bgColor: '#78350f',
-    textColor: '#fbbf24'
-  },
-  {
-    name: 'Noticias',
-    url: 'https://www.google.com',
-    bgColor: '#831843',
-    textColor: '#f472b6'
-  },
-  {
-    name: 'Calendario',
-    url: 'https://www.google.com',
-    bgColor: '#312e81',
-    textColor: '#a5b4fc'
-  }
-]
+
 </script>
 
 <style scoped>
