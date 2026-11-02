@@ -24,7 +24,7 @@ const filtered = computed(() => applyFilters(trades.value, { ...f, recordType: f
 const getters = {
   entryTimestamp: (t) => t.entryTimestamp ?? 0, symbol: (t) => t.symbol, strategyName: (t) => t.strategyName.toLowerCase(), versionNumber: (t) => t.versionNumber,
   timeframe: (t) => t.timeframe, direction: (t) => t.direction, entryPrice: (t) => t.entryPrice, exitPrice: (t) => t.exitPrice ?? -Infinity,
-  resultPct: (t) => t.resultPct ?? -Infinity, resultR: (t) => t.resultR ?? -Infinity, compliance: (t) => t.compliance.pct ?? -1, recordType: (t) => t.recordType,
+  resultPct: (t) => t.resultPct ?? -Infinity, resultR: (t) => t.resultR ?? -Infinity, compliance: (t) => t.compliance.pct ?? -1, attachmentCount: (t) => t.attachmentCount || 0, recordType: (t) => t.recordType,
 }
 const sorted = computed(() => [...filtered.value].sort((a, b) => { const x = getters[sortKey.value](a), y = getters[sortKey.value](b); return (x === y ? b.id - a.id : x > y ? 1 : -1) * sortDir.value }))
 const pages = computed(() => Math.max(1, Math.ceil(sorted.value.length / PAGE_SIZE)))
@@ -33,8 +33,8 @@ const summary = computed(() => computeMetrics(filtered.value, 'R'))
 watch([filtered, sortKey, sortDir], () => { if (page.value >= pages.value) page.value = 0 })
 
 function setSort(k) { if (sortKey.value === k) sortDir.value *= -1; else { sortKey.value = k; sortDir.value = k === 'symbol' || k === 'strategyName' ? 1 : -1 } }
-const COLS = [['entryTimestamp', 'Fecha'], ['symbol', 'Activo'], ['strategyName', 'Estrategia'], ['versionNumber', 'Ver.'], ['timeframe', 'TF'], ['direction', 'Dir.'], ['entryPrice', 'Entrada'], ['exitPrice', 'Salida'], ['resultPct', 'Resultado'], ['resultR', 'R'], ['compliance', 'Reglas'], ['recordType', 'Tipo']]
-const numCols = ['entryPrice', 'exitPrice', 'resultPct', 'resultR', 'compliance', 'versionNumber']
+const COLS = [['entryTimestamp', 'Fecha'], ['symbol', 'Activo'], ['strategyName', 'Estrategia'], ['versionNumber', 'Ver.'], ['timeframe', 'TF'], ['direction', 'Dir.'], ['entryPrice', 'Entrada'], ['exitPrice', 'Salida'], ['resultPct', 'Resultado'], ['resultR', 'R'], ['compliance', 'Reglas'], ['attachmentCount', 'Links'], ['recordType', 'Tipo']]
+const numCols = ['entryPrice', 'exitPrice', 'resultPct', 'resultR', 'compliance', 'versionNumber', 'attachmentCount']
 
 function clearFilters() { Object.assign(f, { query: '', strategyId: '', dateFrom: '', dateTo: '', timeframe: '', outcome: '', recordType: '', direction: '' }) }
 async function confirmDelete() {
@@ -85,6 +85,7 @@ watch(trades, () => { if (detail.value) detail.value = trades.value.find((t) => 
               </td>
               <td class="num" :class="tone(t.resultR)" :title="t.outcome ? OUTCOME_LABELS[t.outcome] : ''">{{ t.resultR === null ? '—' : fmtValue(t.resultR, 'R') }}</td>
               <td class="num">{{ t.compliance.pct === null ? '—' : t.compliance.pct.toFixed(0) + '%' }}</td>
+              <td class="num"><span v-if="t.attachmentCount" class="sl-badge info" title="Tiene links de TradingView: abrí la operación para verlos">↗ {{ t.attachmentCount }}</span><span v-else class="dim">—</span></td>
               <td><span class="sl-badge" :class="t.recordType === 'REAL' ? 'real' : 'bt'">{{ RECORD_LABELS[t.recordType] }}</span></td>
             </tr>
           </tbody>

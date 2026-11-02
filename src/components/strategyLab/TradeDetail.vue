@@ -7,12 +7,18 @@ const props = defineProps({ trade: { type: Object, required: true } })
 defineEmits(['close', 'edit', 'delete'])
 const { api } = useStrategyLab()
 const attachments = ref([])
+const loadingLinks = ref(false)
+const linksError = ref('')
 const zoom = ref(null)
 const links = computed(() => attachments.value.filter((a) => a.kind === 'link'))
 const images = computed(() => attachments.value.filter((a) => a.kind !== 'link'))
 const STATUS = { MET: ['Cumplida', 'pos'], NOT_MET: ['No cumplida', 'neg'], NA: ['No aplica', 'dim'] }
 const KIND = { ENTRY: 'Entrada', EXIT: 'Salida', FILTER: 'Filtro' }
-onMounted(async () => { if (props.trade.attachmentCount) { try { attachments.value = await api.listAttachments(props.trade.id) } catch { /* se muestra sin links */ } } })
+onMounted(async () => {
+  if (!props.trade.attachmentCount) return
+  loadingLinks.value = true
+  try { attachments.value = await api.listAttachments(props.trade.id) } catch (e) { linksError.value = e.message || 'No se pudieron cargar los links' } finally { loadingLinks.value = false }
+})
 </script>
 
 <template>
@@ -36,6 +42,17 @@ onMounted(async () => { if (props.trade.attachmentCount) { try { attachments.val
           <span class="sl-badge">{{ trade.timeframe }}</span>
         </div>
         <div v-if="trade.assetName" class="dim">{{ trade.assetName }}</div>
+
+        <div v-if="trade.attachmentCount" class="sl-panel" style="background: var(--bg)">
+          <div class="sl-panel-head"><span class="sl-panel-title">Links de TradingView ({{ links.length }})</span></div>
+          <div v-if="loadingLinks" class="dim" style="padding: 10px 14px">Cargando links…</div>
+          <div v-else-if="linksError" class="sl-error" style="margin: 10px 14px">{{ linksError }}</div>
+          <div v-else-if="!links.length" class="dim" style="padding: 10px 14px">Esta operación no tiene links.</div>
+          <div v-for="(a, i) in links" :key="a.id" style="display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 7px 14px; border-top: 1px solid var(--border)">
+            <span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap"><span class="dim">{{ i + 1 }}.</span> {{ a.url.replace(/^https?:\/\/(www\.)?/, '') }}</span>
+            <a :href="a.url" target="_blank" rel="noopener noreferrer" class="sl-btn sm" style="text-decoration: none; flex-shrink: 0">Abrir ↗</a>
+          </div>
+        </div>
 
         <div class="sl-cols" style="font-family: var(--font-num)">
           <div><div class="sl-label">Entrada</div>{{ fmtNum(trade.entryPrice, 4) }}<div class="dim">{{ fmtDateTime(trade.entryDate, trade.entryTime) }}</div></div>
@@ -70,8 +87,6 @@ onMounted(async () => { if (props.trade.attachmentCount) { try { attachments.val
         </div>
 
         <div v-if="trade.notes"><div class="sl-panel-title" style="margin-bottom: 4px">Observaciones</div><div style="white-space: pre-wrap; line-height: 1.5">{{ trade.notes }}</div></div>
-        <div v-if="links.length"><div class="sl-panel-title" style="margin-bottom: 6px">Links de TradingView ({{ links.length }})</div>
-          <div style="display: flex; flex-direction: column; gap: 4px"><a v-for="a in links" :key="a.id" :href="a.url" target="_blank" rel="noopener noreferrer" class="info">{{ a.url.replace(/^https?:\/\/(www\.)?/, '') }}</a></div></div>
         <div v-if="images.length"><div class="sl-panel-title" style="margin-bottom: 6px">Capturas guardadas anteriormente</div>
           <div class="sl-img-grid"><img v-for="a in images" :key="a.id" :src="a.dataUrl" :alt="a.filename" @click="zoom = a.dataUrl" /></div></div>
       </div>
