@@ -1,0 +1,90 @@
+/* src/styles/fullscreen-sections.css
+ *
+ * Convierte los modales existentes (Mis Trades, Planilla Pro, Cauciones y
+ * Carteras) en secciones a pantalla completa, con el mismo aspecto que
+ * Strategy Lab: barra superior fija, fondo de la app, contenido centrado.
+ *
+ * No modifica ningún componente: pisa los estilos de overlay / modal / header
+ * (que son idénticos en los cuatro). Los selectores están "reforzados" para
+ * ganarle a los estilos scoped de cada componente, incluidos sus @media.
+ *
+ * Para volver atrás: borrá el import de este archivo en src/main.js.
+ * Para dejar alguna sección como modal, sacá su prefijo de las listas de abajo
+ * (trades, cauciones, pf, journal).
+ */
+
+/* ---- Contenedor: ocupa toda la ventana ---- */
+html body :is(.trades-overlay, .cauciones-overlay, .pf-overlay, .journal-overlay):is(.trades-overlay, .cauciones-overlay, .pf-overlay, .journal-overlay) {
+  position: fixed;
+  inset: 0;
+  display: block;
+  padding: 0;
+  background: var(--bg);
+  z-index: 1000;
+  overflow: hidden;
+}
+
+/* ---- "Modal": deja de ser una caja flotante y pasa a ser la página ---- */
+html body :is(.trades-modal, .cauciones-modal, .pf-modal, .journal-modal):is(.trades-modal, .cauciones-modal, .pf-modal, .journal-modal) {
+  width: 100%;
+  max-width: none;
+  height: 100%;
+  max-height: none;
+  border: 0;
+  border-radius: 0;
+  background: var(--bg);
+  padding: 0 20px 28px;
+  gap: 16px;
+  overflow-y: auto;
+  box-sizing: border-box;
+}
+
+/* ---- Contenido centrado, con el mismo ancho máximo que Strategy Lab ---- */
+html body :is(.trades-modal, .cauciones-modal, .pf-modal, .journal-modal):is(.trades-modal, .cauciones-modal, .pf-modal, .journal-modal) > :not([class$="-header"]) {
+  width: 100%;
+  max-width: 1480px;
+  margin-left: auto;
+  margin-right: auto;
+  box-sizing: border-box;
+}
+
+/* ---- Barra superior fija (igual que la de Strategy Lab) ---- */
+html body :is(.trades-header, .cauciones-header, .pf-header, .journal-header):is(.trades-header, .cauciones-header, .pf-header, .journal-header) {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  flex-shrink: 0;
+  height: 46px;
+  margin: 0 -20px;
+  padding: 0 20px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+}
+
+html body :is(.trades-title, .cauciones-title, .pf-title, .journal-title):is(.trades-title, .cauciones-title, .pf-title, .journal-title) {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--blue);
+  gap: 8px;
+}
+html body .pf-title .build-tag { text-transform: none; letter-spacing: 0.02em; }
+
+html body :is(.trades-header, .cauciones-header, .pf-header, .journal-header) .close-btn {
+  width: 28px;
+  height: 28px;
+  border-radius: 4px;
+  font-size: 14px;
+}
+
+@media (max-width: 760px) {
+  html body :is(.trades-modal, .cauciones-modal, .pf-modal, .journal-modal):is(.trades-modal, .cauciones-modal, .pf-modal, .journal-modal) {
+    padding: 0 10px 20px;
+    height: 100%;
+  }
+  html body :is(.trades-header, .cauciones-header, .pf-header, .journal-header):is(.trades-header, .cauciones-header, .pf-header, .journal-header) {
+    margin: 0 -10px;
+    padding: 0 10px;
+  }
+}
