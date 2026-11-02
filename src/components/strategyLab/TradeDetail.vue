@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useStrategyLab } from '../../composables/useStrategyLab.js'
 import { fmtValue, fmtNum, fmtDateTime, tone, MARKET_LABELS, OUTCOME_LABELS, RECORD_LABELS } from '../../services/strategyLab/format.js'
 
@@ -8,9 +8,11 @@ defineEmits(['close', 'edit', 'delete'])
 const { api } = useStrategyLab()
 const attachments = ref([])
 const zoom = ref(null)
+const links = computed(() => attachments.value.filter((a) => a.kind === 'link'))
+const images = computed(() => attachments.value.filter((a) => a.kind !== 'link'))
 const STATUS = { MET: ['Cumplida', 'pos'], NOT_MET: ['No cumplida', 'neg'], NA: ['No aplica', 'dim'] }
 const KIND = { ENTRY: 'Entrada', EXIT: 'Salida', FILTER: 'Filtro' }
-onMounted(async () => { if (props.trade.attachmentCount) { try { attachments.value = await api.listAttachments(props.trade.id) } catch { /* se muestra sin capturas */ } } })
+onMounted(async () => { if (props.trade.attachmentCount) { try { attachments.value = await api.listAttachments(props.trade.id) } catch { /* se muestra sin links */ } } })
 </script>
 
 <template>
@@ -68,8 +70,10 @@ onMounted(async () => { if (props.trade.attachmentCount) { try { attachments.val
         </div>
 
         <div v-if="trade.notes"><div class="sl-panel-title" style="margin-bottom: 4px">Observaciones</div><div style="white-space: pre-wrap; line-height: 1.5">{{ trade.notes }}</div></div>
-        <div v-if="attachments.length"><div class="sl-panel-title" style="margin-bottom: 6px">Capturas</div>
-          <div class="sl-img-grid"><img v-for="a in attachments" :key="a.id" :src="a.dataUrl" :alt="a.filename" @click="zoom = a.dataUrl" /></div></div>
+        <div v-if="links.length"><div class="sl-panel-title" style="margin-bottom: 6px">Links de TradingView ({{ links.length }})</div>
+          <div style="display: flex; flex-direction: column; gap: 4px"><a v-for="a in links" :key="a.id" :href="a.url" target="_blank" rel="noopener noreferrer" class="info">{{ a.url.replace(/^https?:\/\/(www\.)?/, '') }}</a></div></div>
+        <div v-if="images.length"><div class="sl-panel-title" style="margin-bottom: 6px">Capturas guardadas anteriormente</div>
+          <div class="sl-img-grid"><img v-for="a in images" :key="a.id" :src="a.dataUrl" :alt="a.filename" @click="zoom = a.dataUrl" /></div></div>
       </div>
     </div>
     <div v-if="zoom" class="sl-modal-bg" style="z-index: 1300; align-items: center" @click.stop="zoom = null"><img :src="zoom" style="max-width: 96vw; max-height: 92vh" /></div>

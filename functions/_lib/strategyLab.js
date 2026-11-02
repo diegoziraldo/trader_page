@@ -7,7 +7,7 @@
 
 import {
   DIRECTION_MODES, CONDITION_KINDS, CONDITION_STATUSES, INSTRUMENT_TYPES, RECORD_TYPES,
-  computeTrade, computeCompliance, validateTradeInput, toNum,
+  computeTrade, computeCompliance, validateTradeInput, toNum, normalizeTradingViewUrl,
 } from '../../src/services/strategyLab/tradeMath.js'
 
 const fail = (status, message) => { throw { status, message } }
@@ -453,32 +453,43 @@ export async function removeTrade(db, id) {
 }
 
 // ---------------------------------------------------------------------------
-// CAPTURAS
+// LINKS DE TRADINGVIEW (y capturas heredadas)
+// Los links se guardan en trade_attachments con mime 'text/uri-list': solo la
+// URL, ningún archivo. Las imágenes que ya estuvieran guardadas se siguen
+// pudiendo ver y quitar, pero ya no se aceptan nuevas.
 // ---------------------------------------------------------------------------
-const MAX_ATTACHMENTS = 3
-const MAX_DATA_URL_CHARS = 1_400_000
-const ALLOWED_MIME = ['image/png', 'image/jpeg', 'image/webp']
+const LINK_MIME = 'text/uri-list'
+const MAX_LINKS = 200 // tope de seguridad, no un límite de uso real
+
+function formatAttachment(a) {
+  const isLink = a.mime === LINK_MIME
+  return {
+    id: a.id, tradeId: a.trade_id, kind: isLink ? 'link' : 'image', filename: a.filename, mime: a.mime,
+    url: isLink ? a.data_url : null, dataUrl: isLink ? null : a.data_url, sizeBytes: a.size_bytes, createdAt: a.created_at,
+  }
+}
 
 export async function listAttachments(db, tradeId) {
   const { results } = await db.prepare('SELECT * FROM trade_attachments WHERE trade_id = ? ORDER BY id').bind(tradeId).all()
-  return results.map((a) => ({ id: a.id, tradeId: a.trade_id, filename: a.filename, mime: a.mime, sizeBytes: a.size_bytes, dataUrl: a.data_url, createdAt: a.created_at }))
+  return results.map(formatAttachment)
 }
 
 export async function addAttachment(db, tradeId, body) {
   const trade = await db.prepare('SELECT id FROM strategy_trades WHERE id = ?').bind(tradeId).first()
   if (!trade) fail(404, 'Operación no encontrada')
-  const m = /^data:(image\/(?:png|jpeg|webp));base64,[A-Za-z0-9+/=]+$/.exec(body.dataUrl || '')
-  if (!m || !ALLOWED_MIME.includes(m[1])) fail(400, 'La captura debe ser una imagen PNG, JPEG o WEBP')
-  if (body.dataUrl.length > MAX_DATA_URL_CHARS) fail(413, 'La imagen es demasiado grande (máx. ~1 MB). Probá con una captura más chica.')
-  const { c } = await db.prepare('SELECT COUNT(*) AS c FROM trade_attachments WHERE trade_id = ?').bind(tradeId).first()
-  if (c >= MAX_ATTACHMENTS) fail(409, `Máximo ${MAX_ATTACHMENTS} capturas por operación`)
-  const info = await db.prepare('INSERT INTO trade_attachments (trade_id, filename, mime, size_bytes, data_url) VALUES (?, ?, ?, ?, ?)')
-    .bind(tradeId, str(body.filename, 120), m[1], Math.floor((body.dataUrl.length * 3) / 4), body.dataUrl).run()
+  const url = normalizeTradingViewUrl(body.url)
+  if (!url) fail(400, 'Solo se aceptan links de TradingView (por ejemplo https://www.tradingview.com/x/...)')
+  const dup = await db.prepare('SELECT id FROM trade_attachments WHERE trade_id = ? AND mime = ? AND data_url = ?').bind(tradeId, LINK_MIME, url).first()
+  if (dup) fail(409, 'Ese link ya está cargado en la operación')
+  const { c } = await db.prepare('SELECT COUNT(*) AS c FROM trade_attachments WHERE trade_id = ? AND mime = ?').bind(tradeId, LINK_MIME).first()
+  if (c >= MAX_LINKS) fail(409, `Máximo ${MAX_LINKS} links por operación`)
+  const info = await db.prepare('INSERT INTO trade_attachments (trade_id, filename, mime, size_bytes, data_url) VALUES (?, ?, ?, 0, ?)')
+    .bind(tradeId, str(body.label, 120), LINK_MIME, url).run()
   const row = await db.prepare('SELECT * FROM trade_attachments WHERE id = ?').bind(info.meta.last_row_id).first()
-  return { id: row.id, tradeId: row.trade_id, filename: row.filename, mime: row.mime, sizeBytes: row.size_bytes, dataUrl: row.data_url, createdAt: row.created_at }
+  return formatAttachment(row)
 }
 
 export async function removeAttachment(db, tradeId, attachmentId) {
   const r = await db.prepare('DELETE FROM trade_attachments WHERE id = ? AND trade_id = ?').bind(attachmentId, tradeId).run()
-  if (r.meta.changes === 0) fail(404, 'Captura no encontrada')
+  if (r.meta.changes === 0) fail(404, 'Elemento no encontrado')
 }

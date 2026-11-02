@@ -4,7 +4,7 @@
 // exactamente lo que se guarda.
 import { reactive, ref, computed, watch, onMounted } from 'vue'
 import { useStrategyLab } from '../../composables/useStrategyLab.js'
-import { INSTRUMENT_TYPES, computeTrade, computeCompliance, validateTradeInput } from '../../services/strategyLab/tradeMath.js'
+import { INSTRUMENT_TYPES, computeTrade, computeCompliance, validateTradeInput, normalizeTradingViewUrl, splitLinkInput } from '../../services/strategyLab/tradeMath.js'
 import { MARKET_LABELS, OUTCOME_LABELS, fmtNum, fmtValue, tone } from '../../services/strategyLab/format.js'
 
 const props = defineProps({ trade: { type: Object, default: null } })
@@ -20,8 +20,10 @@ const blank = () => ({
 })
 const f = reactive(blank())
 const results = reactive({}) // conditionId -> 'MET' | 'NOT_MET' | 'NA'
-const pending = ref([])      // capturas nuevas aún no subidas [{ name, dataUrl }]
-const existing = ref([])     // capturas ya guardadas (edición)
+const pendingLinks = ref([]) // links de TradingView nuevos, todavía sin guardar [url]
+const existing = ref([])     // links (y capturas heredadas) ya guardados (edición)
+const linkInput = ref('')
+const linkError = ref('')
 const saving = ref(false)
 const error = ref('')
 const flash = ref('')
@@ -77,36 +79,26 @@ const compliance = computed(() => computeCompliance(enabledConds.value.map((c) =
 const riskPerUnit = computed(() => (Number(f.entryPrice) > 0 && Number(f.stopLoss) > 0 ? Math.abs(Number(f.entryPrice) - Number(f.stopLoss)) : null))
 const rrBelowTarget = computed(() => version.value?.targetRr && calc.value.plannedRR !== null && calc.value.plannedRR < version.value.targetRr)
 
-// ---------- Capturas ----------
-async function fileToDataUrl(file) {
-  const url = URL.createObjectURL(file)
-  try {
-    const img = await new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = () => rej(new Error('No se pudo leer la imagen')); i.src = url })
-    let maxSide = 1400, quality = 0.82
-    for (let attempt = 0; attempt < 5; attempt++) {
-      const scale = Math.min(1, maxSide / Math.max(img.width, img.height))
-      const c = document.createElement('canvas')
-      c.width = Math.round(img.width * scale); c.height = Math.round(img.height * scale)
-      c.getContext('2d').drawImage(img, 0, 0, c.width, c.height)
-      const data = c.toDataURL('image/jpeg', quality)
-      if (data.length <= 1_300_000) return data
-      maxSide = Math.round(maxSide * 0.75); quality = Math.max(0.5, quality - 0.08)
-    }
-    throw new Error('La imagen sigue siendo demasiado grande, probá con una captura más chica')
-  } finally { URL.revokeObjectURL(url) }
-}
-async function onFiles(ev) {
-  error.value = ''
-  for (const file of Array.from(ev.target.files || [])) {
-    if (pending.value.length + existing.value.length >= 3) { error.value = 'Máximo 3 capturas por operación'; break }
-    if (!file.type.startsWith('image/')) { error.value = 'Solo se aceptan imágenes'; continue }
-    try { pending.value.push({ name: file.name, dataUrl: await fileToDataUrl(file) }) } catch (e) { error.value = e.message }
+// ---------- Links de TradingView ----------
+const existingLinks = computed(() => existing.value.filter((x) => x.kind === 'link').map((x) => x.url))
+function addLinks() {
+  linkError.value = ''
+  const tokens = splitLinkInput(linkInput.value)
+  if (!tokens.length) { linkError.value = 'Pegá un link de TradingView'; return }
+  const bad = []
+  for (const t of tokens) {
+    const url = normalizeTradingViewUrl(t)
+    if (!url) { bad.push(t); continue }
+    if (pendingLinks.value.includes(url) || existingLinks.value.includes(url)) continue
+    pendingLinks.value.push(url)
   }
-  ev.target.value = ''
+  linkInput.value = bad.join('\n')
+  if (bad.length) linkError.value = `${bad.length} link(s) no válidos: solo se aceptan links de tradingview.com`
 }
 async function removeExisting(att) {
   try { await api.deleteAttachment(props.trade.id, att.id); existing.value = existing.value.filter((a) => a.id !== att.id) } catch (e) { error.value = e.message }
 }
+const shortLink = (u) => u.replace(/^https?:\/\/(www\.)?/, '')
 
 // ---------- Guardado ----------
 async function save(andNew = false) {
@@ -118,11 +110,11 @@ async function save(andNew = false) {
     if (isEdit.value) { delete body.strategyId; delete body.versionId }
     const saved = isEdit.value ? await updateTrade(props.trade.id, body) : await createTrade(body)
     let uploadError = ''
-    for (const p of pending.value) {
-      try { await api.addAttachment(saved.id, { filename: p.name, dataUrl: p.dataUrl }) } catch (e) { uploadError = e.message }
+    for (const url of pendingLinks.value) {
+      try { await api.addAttachment(saved.id, { url }) } catch (e) { uploadError = e.message }
     }
-    pending.value = []
-    if (uploadError) flash.value = `Operación guardada, pero una captura no se pudo subir: ${uploadError}`
+    pendingLinks.value = []
+    if (uploadError) flash.value = `Operación guardada, pero un link no se pudo guardar: ${uploadError}`
     emit('saved', saved, andNew)
     if (andNew && !isEdit.value) {
       Object.assign(f, { symbol: '', assetName: '', entryTime: '', entryPrice: '', stopLoss: '', takeProfit: '', riskAmount: '', riskPercent: '', quantity: '', fees: '', exitDate: '', exitTime: '', exitPrice: '', notes: '' })
@@ -260,14 +252,29 @@ const kindLabel = { ENTRY: 'Entrada', EXIT: 'Salida', FILTER: 'Filtro' }
 
       <!-- 5. Observaciones -->
       <div class="sl-panel">
-        <div class="sl-panel-head"><span class="sl-panel-title">5 · Observaciones y capturas</span></div>
+        <div class="sl-panel-head"><span class="sl-panel-title">5 · Observaciones y links de TradingView</span></div>
         <div class="sl-panel-body" style="display: flex; flex-direction: column; gap: 12px">
           <textarea v-model="f.notes" class="sl-textarea" rows="3" placeholder="Contexto, qué viste, errores, dudas..." />
-          <div class="sl-img-grid">
-            <div v-for="a in existing" :key="'e' + a.id" style="display: flex; flex-direction: column; gap: 4px"><img :src="a.dataUrl" :alt="a.filename" /><button type="button" class="sl-btn sm danger" @click="removeExisting(a)">Quitar</button></div>
-            <div v-for="(p, i) in pending" :key="'p' + i" style="display: flex; flex-direction: column; gap: 4px"><img :src="p.dataUrl" :alt="p.name" /><button type="button" class="sl-btn sm danger" @click="pending.splice(i, 1)">Quitar</button></div>
+          <div class="sl-field">
+            <span class="sl-label">Links de TradingView (no se guarda ninguna imagen, solo el link)</span>
+            <div style="display: flex; gap: 8px">
+              <input v-model="linkInput" class="sl-input" placeholder="https://www.tradingview.com/x/..." @keydown.enter.prevent="addLinks" />
+              <button type="button" class="sl-btn" @click="addLinks">Agregar link</button>
+            </div>
+            <span v-if="linkError" class="neg" style="font-size: 12px">{{ linkError }}</span>
+            <span v-else class="dim" style="font-size: 12px">Podés pegar varios a la vez. No hay límite de links por operación.</span>
           </div>
-          <div><input type="file" accept="image/*" multiple :disabled="pending.length + existing.length >= 3" @change="onFiles" /> <span class="dim">Hasta 3 capturas; se reducen automáticamente antes de guardarse.</span></div>
+          <div v-if="pendingLinks.length || existing.length" class="sl-list" style="border: 1px solid var(--border); border-radius: 4px">
+            <div v-for="a in existing" :key="'e' + a.id" style="display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 6px 10px; border-bottom: 1px solid var(--border)">
+              <a v-if="a.kind === 'link'" :href="a.url" target="_blank" rel="noopener noreferrer" class="info" style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap">{{ shortLink(a.url) }}</a>
+              <span v-else class="dim">Captura guardada anteriormente (imagen)</span>
+              <button type="button" class="sl-btn sm danger" @click="removeExisting(a)">Quitar</button>
+            </div>
+            <div v-for="(u, i) in pendingLinks" :key="'p' + i" style="display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 6px 10px; border-bottom: 1px solid var(--border)">
+              <span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap">{{ shortLink(u) }} <span class="sl-badge warn">sin guardar</span></span>
+              <button type="button" class="sl-btn sm danger" @click="pendingLinks.splice(i, 1)">Quitar</button>
+            </div>
+          </div>
         </div>
       </div>
 

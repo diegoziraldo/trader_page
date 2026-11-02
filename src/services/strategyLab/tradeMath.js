@@ -207,3 +207,27 @@ export function computeCompliance(results) {
   if (applicable > 0) bucket = notMet === 0 ? 'FULL' : met === 0 ? 'NONE' : 'PARTIAL'
   return { met, notMet, na, applicable, pct, requiredMet: reqMet, requiredApplicable: reqApplicable, requiredPct, bucket }
 }
+
+// ---------------------------------------------------------------------------
+// Links de TradingView (reemplazan a las capturas de imagen: no se guarda
+// ningún archivo, solo la URL). Acepta tradingview.com y sus subdominios
+// (www., es., in.), exige una ruta (no la home) y siempre devuelve https.
+// ---------------------------------------------------------------------------
+export function normalizeTradingViewUrl(raw) {
+  const s = String(raw ?? '').trim()
+  if (!s || s.length > 500) return null
+  let u
+  try { u = new URL(/^https?:\/\//i.test(s) ? s : `https://${s}`) } catch { return null }
+  if (u.protocol !== 'https:' && u.protocol !== 'http:') return null
+  if (u.username || u.password) return null
+  const h = u.hostname.toLowerCase()
+  if (h !== 'tradingview.com' && !h.endsWith('.tradingview.com')) return null
+  if (u.pathname.length <= 1) return null
+  u.protocol = 'https:'
+  return u.toString()
+}
+
+// Separa un texto pegado (uno o varios links, por espacios o saltos de línea).
+export function splitLinkInput(text) {
+  return String(text ?? '').split(/[\s,;]+/).map((t) => t.trim()).filter(Boolean)
+}

@@ -102,6 +102,6 @@ watch(trades, () => { if (detail.value) detail.value = trades.value.find((t) => 
         <div style="padding: 14px"><TradeForm :trade="editing" @saved="onSaved" @cancel="editing = null" /></div>
       </div>
     </div>
-    <ConfirmDialog v-if="toDelete" title="Eliminar operación" :message="`¿Eliminar la operación ${toDelete.symbol} del ${toDelete.entryDate}? Se borran también el estado de sus reglas y sus capturas. No se puede deshacer.`" confirm-text="Eliminar" :busy="busy" @confirm="confirmDelete" @cancel="toDelete = null" />
+    <ConfirmDialog v-if="toDelete" title="Eliminar operación" :message="`¿Eliminar la operación ${toDelete.symbol} del ${toDelete.entryDate}? Se borran también el estado de sus reglas y sus links. No se puede deshacer.`" confirm-text="Eliminar" :busy="busy" @confirm="confirmDelete" @cancel="toDelete = null" />
   </div>
 </template>
